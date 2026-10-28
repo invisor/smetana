@@ -52,7 +52,7 @@ import {
 } from '../stores/app.js'
 import { clearStorage, surveyStorage } from '../stores/attachments.js'
 import { checkForUpdate, initUpdates, installUpdate, updatesState } from '../stores/updates.js'
-import { shownRefusal } from '../components/settings/update.js'
+import { installStep, shownRefusal } from '../components/settings/update.js'
 import { DEFAULT_RELAY_URL, remainingSeconds } from '../components/settings/devices.js'
 import {
   beginPairing,
@@ -69,6 +69,7 @@ import { localStopLine, nextStep } from '../components/settings/serverChoice.js'
 import {
   connection,
   initConnection,
+  isRemote,
   localServerWork,
   readServerTarget,
   requestServerSwitch
@@ -813,7 +814,7 @@ watch(
    the state that stopped it — so there is nothing to catch and nothing to say.
 
    Installing is the opposite: nearly every way it can decline is a refusal
-   carrying its reason, the run gate above all, and on success it does not return
+   carrying its reason, and on success it does not return
    in any useful sense because the app is on its way out. The exception is
    `newer_version` — the press found a newer release and started fetching it —
    which `shownRefusal` drops: the state line says it and moves on with the
@@ -825,13 +826,43 @@ const check = () => {
   checkForUpdate()
 }
 
-const install = async () => {
-  updateRefusal.value = null
+/* Installing restarts the local server too, which ends what it is running, so the press is two steps
+   only when there is something to end: `updateAsk` holds the list while the person decides, and
+   nothing has been installed or stopped until they do. The rule of what to ask and what to send is
+   `installStep`'s; this is the same shape as the Server tab's `server.ask` above. */
+const updateAsk = ref(null)
+const asking = ref(false)
+
+const runInstall = async (confirmed) => {
+  updateAsk.value = null
   try {
-    await installUpdate()
+    await installUpdate(confirmed)
   } catch (err) {
     updateRefusal.value = shownRefusal(err)
   }
+}
+
+const install = async () => {
+  if (asking.value) return
+  updateRefusal.value = null
+  asking.value = true
+  try {
+    const step = installStep({
+      remote: isRemote.value,
+      work: isRemote.value ? null : await localServerWork()
+    })
+    if (step.kind === 'ask') updateAsk.value = step.work
+    else await runInstall(step.confirmed)
+  } finally {
+    asking.value = false
+  }
+}
+
+/* The list sent is the list shown, not a fresh read: the server's gate covers only the work it names,
+   so work that began after the yes is refused there and never ended unseen. */
+const confirmInstall = () => runInstall([...(updateAsk.value ?? [])])
+const cancelInstall = () => {
+  updateAsk.value = null
 }
 
 const rootStyle = {
@@ -1001,9 +1032,12 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :version="version"
           :update-state="updatesState.state"
           :update-refusal="updateRefusal"
+          :install-ask="updateAsk"
           @open="openExternal"
           @check="check"
           @install="install"
+          @confirm-install="confirmInstall"
+          @cancel-install="cancelInstall"
         />
       </div>
     </div>

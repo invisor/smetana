@@ -33,6 +33,7 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
@@ -164,6 +165,51 @@ pub async fn local_work(app: &AppHandle) -> Value {
     link.call("server_work", json!({})).await.unwrap_or_else(|_| json!([]))
 }
 
+/// What an install asks of the local server once the new bundle is in place: `server_restart` `now`
+/// with `confirmed` set to the list the person saw. `now` and not a mode of its own because the server
+/// answering is the *old* one, which knows only the modes of its own release; `now` with `confirmed`
+/// has been in the protocol since 1.9, and the server re-executes `current_exe()`, which by then is the
+/// new binary.
+fn update_restart_request(confirmed: &[Value]) -> Value {
+    json!({ "mode": "now", "confirmed": confirmed })
+}
+
+/// Reads the server's answer to [`update_restart_request`]. `Ok` only when it said it is restarting;
+/// anything else is the reason the server was left as it was, in words for the shell's log. Nothing is
+/// ended on any path but `restarting`, and that one is the server's own gate having accepted the list.
+fn update_restart_verdict(reply: Result<Value, Value>) -> Result<(), String> {
+    match reply {
+        Ok(reply) => match reply["outcome"].as_str() {
+            Some("restarting") => Ok(()),
+            Some("needs-confirmation") => {
+                let count = reply["work"].as_array().map_or(0, Vec::len);
+                Err(format!(
+                    "work the person did not see is running on the server ({count} item(s)), so it was not restarted; the version lock-step will offer the restart"
+                ))
+            }
+            Some(other) => Err(format!("the server answered `{other}` to the restart, so it was not restarted")),
+            None => Err("the server's answer to the restart had no outcome".to_owned()),
+        },
+        Err(why) => Err(said(why)),
+    }
+}
+
+/// `updates_install`'s second step: restart the local server onto the bundle just installed, ending
+/// only the work in `confirmed`. A server on another machine is not touched (`Ok`). An `Err` is a
+/// reason to log, never a reason to stop the app's own restart: the bundle is already replaced, and the
+/// older server is picked up by the version lock-step.
+pub async fn restart_local_for_update(app: &AppHandle, confirmed: &[Value]) -> Result<(), String> {
+    let link = link(app).ok_or("The connection has not been set up.")?;
+    if !link.target().is_local() {
+        return Ok(());
+    }
+    let call = link.call("server_restart", update_restart_request(confirmed));
+    match tokio::time::timeout(Duration::from_secs(10), call).await {
+        Ok(reply) => update_restart_verdict(reply),
+        Err(_) => Err("the server did not answer the restart within 10 seconds".to_owned()),
+    }
+}
+
 /// `tracker_access_reset`: make macOS forget its stored refusal of the open project's folder, then
 /// stop the server on this machine so that a fresh one is started and asked again.
 ///
@@ -270,6 +316,26 @@ mod tests {
         let busy = json!([{ "kind": "run", "id": "r1", "project": "/Users/me/notes", "label": "notes run", "owner": null }]);
         let refused = reset_plan(true, &reset, &dir, &busy).unwrap_err();
         assert!(refused.contains("notes run") && refused.contains("restarts the server"), "{refused}");
+    }
+
+    #[test]
+    fn an_update_asks_for_a_restart_now_with_exactly_the_list_the_person_saw() {
+        let seen = vec![json!({ "kind": "run", "id": 7, "project": "/p", "label": "notes run", "owner": null })];
+        assert_eq!(update_restart_request(&seen), json!({ "mode": "now", "confirmed": seen }));
+        assert_eq!(update_restart_request(&[]), json!({ "mode": "now", "confirmed": [] }));
+    }
+
+    #[test]
+    fn only_a_server_that_says_it_is_restarting_counts_as_restarted() {
+        assert_eq!(update_restart_verdict(Ok(json!({ "outcome": "restarting", "scheduled": false, "work": [] }))), Ok(()));
+        let busy = json!({ "outcome": "needs-confirmation", "scheduled": false, "work": [{ "kind": "shell" }, { "kind": "run" }] });
+        let why = update_restart_verdict(Ok(busy)).unwrap_err();
+        assert!(why.contains("2 item(s)") && why.contains("not restarted"), "{why}");
+        let scheduled = update_restart_verdict(Ok(json!({ "outcome": "scheduled", "work": [] }))).unwrap_err();
+        assert!(scheduled.contains("scheduled"), "{scheduled}");
+        assert!(update_restart_verdict(Ok(json!({}))).unwrap_err().contains("no outcome"));
+        let refused = update_restart_verdict(Err(json!("The connection to the server was lost before the request was sent."))).unwrap_err();
+        assert!(refused.contains("lost"), "{refused}");
     }
 
     #[test]

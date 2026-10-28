@@ -108,7 +108,10 @@ export async function checkForUpdate() {
    was downloaded is still downloaded and the press is still there to make
    again. The exception is a `newer_version` rejection, which is not a refusal:
    the feed had a newer release, nothing was installed and the machine has moved
-   on to downloading it, which arrives as an ordinary state event. */
-export async function installUpdate() {
-  await invoke('updates_install')
+   on to downloading it, which arrives as an ordinary state event.
+
+   `confirmed` is the local server's live work exactly as the person was shown it (`installStep` in
+   `components/settings/update.js`), `[]` when there was none: Rust passes it on to `server_restart`. */
+export async function installUpdate(confirmed = []) {
+  await invoke('updates_install', { confirmed })
 }

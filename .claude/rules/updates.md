@@ -106,18 +106,43 @@ version was ready. The state line is the message — "Smetana 0.1.2 is newer tha
 button is gone meanwhile, since `downloading` offers nothing to press. The comparison is inequality:
 the feed decides which release is latest, and there is no version-ordering dependency in the tree.
 
-## No run gate: the server is not the app
+## No run gate, but one confirmation for the server too
 
-The release that held its workers in-process refused an install while any run was live anywhere,
-because the relaunch ended every PTY child and a run's agents are those children. That gate went with
-the in-process back end at switch-over (`.claude/rules/remote.md`, "The desktop is a client"): the
-runs, sessions and shells belong to `smetanad`, which runs detached and outlives the app's restart, so
-an install replaces the client and nothing a run depends on. `UpdateError` lost `RunLive` and `Runs`
-with it, and `installRefusal` lost the sentence that named the projects. Replacing the **server** has
-its own gate — no live work of any kind, nothing ended without a yes — and it is `smetanad`'s restart,
-reached through the version lock-step once the new bundle starts.
+The release that held its workers in-process refused an install while any run was live, because the
+relaunch ended every PTY child. That gate went with the in-process back end at switch-over
+(`.claude/rules/remote.md`, "The desktop is a client"): runs, sessions and shells belong to `smetanad`,
+which runs detached and outlives the app's restart. `UpdateError` has no `RunLive` or `Runs`, and
+nothing in `updates_install` refuses because of a run.
 
-`updates_install` still ends with `app.request_restart()` rather than `restart`: it goes through the
+**An install does restart the local server, in the same press** (smetana-38v5). The new bundle carries a
+new `smetanad`, and a new shell meeting the old one used to raise the version lock-step banner: a second
+decision after the first. Now:
+
+1. About asks `localServerWork()` (`server_local_work`; `[]` for a remote server). `installStep` in
+   `update.js` is the rule: a non-empty list is shown in the tab (`installAsk` on `AboutSettings`,
+   `updateAsk` in `SettingsWindow.vue`, the same shape as the Server tab's `server.ask`) with *End it and
+   install* and *Cancel*; an empty list, a server that could not be asked, or a remote target installs at
+   once. Cancel changes nothing.
+2. `installUpdate(confirmed)` passes **the list that was shown**, not a fresh read, as the `confirmed`
+   argument of `updates_install`.
+3. After the bundle is replaced, `updates_install` calls `client::restart_local_for_update`:
+   `server_restart` `now` with exactly that `confirmed`, then `request_restart()`. The order is the
+   point: the server re-executes `current_exe()`, which is the new binary only once the bundle is in
+   place. `now` and not a new gateway mode, because the server answering is the *old* one and knows
+   only its own release's modes. A remote target is not touched.
+4. Nothing is ended unseen: the gateway covers only the work `confirmed` names. A `needs-confirmation`
+   (work began after the yes), any other outcome, an error or a 10 second silence is a `log::warn!` line
+   with the reason, the app restarts anyway (the bundle is already in), and the older server is left to
+   the lock-step banner, which stays as the fallback.
+
+**The lock race.** `smetanad`'s `run` shuts the `Server` down (dropping its lock) before `restart_self`
+execs, so `server.lock` is free for a moment and the credential file is removed. A shell that sees that
+moment may start a second `smetanad`; the two race for `lock_directory`, the loser exits with "already
+owns", and `spawn::ensure`'s wait ends in a transient failure that the connection loop retries, finding
+the lock owned and waiting for its credential. One server survives either way. The new shell only starts
+seconds after the restart was asked, so in practice it does not see the gap at all.
+
+`updates_install` ends with `app.request_restart()` rather than `restart`: it goes through the
 event loop whatever thread it is called from, so `RunEvent::Exit` fires in `lib.rs` as on an ordinary
 quit.
 
@@ -275,7 +300,7 @@ not be installed." and drops the sentence this app would have written for it. `.
 ## What is tested
 
 `cargo test` covers the pure halves whole — `Machine`'s transitions and its guards, the
-framing of somebody else's error, and two tests that pin the JSON both types travel as
+framing of somebody else's error, and `client::tests` for the restart request and how its answer is read, two tests that pin the JSON both types travel as
 (`the_state_travels_tagged_and_whole`, `a_refusal_travels_as_a_kind_and_a_detail`) — plus
 `the_first_check_waits_and_the_next_one_is_a_day_later` over the two schedule constants. `npm test`
 covers `tests/stores/updates.test.js` and `tests/components/settings/update.test.js`. Nothing tests
