@@ -361,17 +361,20 @@ pub enum Request {
     /// ceiling on a blocking receive. The same shape the terminal's has, for
     /// the same reason.
     ShutDown(std::sync::mpsc::Sender<()>),
-    /// Every driven session whose child is still running, for the server's restart gateway: a
-    /// restart ends every child it owns, so what is alive is what a person has to be shown first.
+    /// Every driven session whose child is still running, with the state it is in, for the server's
+    /// restart gateway: a restart ends every child it owns, and the gateway decides from the state
+    /// which of them is work a person has to be shown first.
     Live(oneshot::Sender<Vec<LiveSession>>),
 }
 
-/// A driven session with a running child: what the restart gateway lists.
+/// A driven session with a running child, and the state it last reported: what the restart gateway
+/// reads to list the sessions that are working.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveSession {
     pub id: SessionId,
     pub project: String,
     pub agent: String,
+    pub state: SessionState,
 }
 
 #[derive(Clone)]
@@ -2481,7 +2484,12 @@ fn handle(
             let mut list: Vec<LiveSession> = sessions
                 .iter()
                 .filter(|(_, live)| live.child_alive)
-                .map(|(id, live)| LiveSession { id: *id, project: live.project.clone(), agent: live.agent.clone() })
+                .map(|(id, live)| LiveSession {
+                    id: *id,
+                    project: live.project.clone(),
+                    agent: live.agent.clone(),
+                    state: live.state,
+                })
                 .collect();
             list.sort_by_key(|session| session.id);
             let _ = tx.send(list);

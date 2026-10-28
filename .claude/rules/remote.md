@@ -343,7 +343,8 @@ this crate's tests); `check_ticket` and the rest of the switch are.
 (like `when-idle`, but the host's `stop` callback runs: `Exit::Stop`, exit 0, which a service manager must not restart; reply outcome
 `stopping` when nothing is alive, `scheduled` otherwise; it replaces a waiting restart and `cancel` withdraws it). `server_use_remote`
 asks for it only when the person chose "stop it when it is finished"; the settings tab asks first when `server_local_work` is not empty
-(`serverChoice.js::nextStep`). Nothing is ended by the switch.
+(`serverChoice.js::nextStep`). Nothing is ended by the switch. The list is the one above: agents waiting for a person are not in it, so
+`stop-when-idle` waits only for runs, working agents and shells, and the stop ends the idle agents left.
 
 **Four server commands** (`SERVER_ONLY_COMMANDS`, desktop devices only, a phone is `Forbidden`), the logic in `smetana_core::placement`:
 - `folders_list { path }`: directories under the server user's home (`HOME`, else `USERPROFILE`), hidden ones left out, symlinks resolved
@@ -473,7 +474,13 @@ here. Two exist:
   It is separate from `tracker_health`, which moves with the open project. `smetanad status` prints the same report.
 - **`server_restart { mode, confirmed }`**, the restart gateway (`gateway.rs`). `mode` is `now`, `when-idle` or `cancel`;
   `confirmed` is optional: `null`, or the list of work the person was shown. A restart ends every child the server owns, so
-  the rule is **no live work of any kind** (runs, agent sessions, driven sessions, shells) and nothing is ended silently:
+  the rule is **no running work of any kind** and nothing is ended silently. What counts (`live_work` in `smetanad`'s `server.rs`,
+  through `terminal_counts` and `driven_counts`): a run; a terminal agent only in `starting` or `running` (`idle`, `needs-you` and
+  `exited` do not, since an agent's harness redraws while it works and a still screen means it is waiting); a plain shell until it
+  exits, because a quiet shell screen says nothing about work (`npm run dev` reads as idle); a driven session only in `starting` or
+  `running`. So an unconfirmed `now` (the shell's automatic gate on connect) restarts over idle agents **without asking** and ends
+  them, and they come back as offline rows with resume; `when-idle` and `stop-when-idle` wait only for runs, working agents and
+  shells and end idle agents still there at that moment. Otherwise:
   `now` with nothing alive restarts; with work alive it answers `needs-confirmation` with the list and does nothing. The
   person's answer is the same request with `confirmed` set to **that list**, and it covers only the work it names: if
   anything else is alive the server answers `needs-confirmation` again with the fresh list. A run is named by its **token**

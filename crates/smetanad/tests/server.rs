@@ -197,6 +197,19 @@ fn restart_now_with_a_live_session_lists_the_work_and_restarts_nothing() {
         let client = Client::connect(&server.data_dir).await.unwrap();
         let id = a_shell(&client).await;
 
+        // A quiet shell reads as idle, and it is still work: it may be somebody's dev server.
+        let dir = std::env::temp_dir();
+        let mut state = String::new();
+        for _ in 0..200 {
+            let sessions = client.call("terminal_list", json!({ "project": dir })).await.unwrap();
+            state = sessions.as_array().unwrap().iter().find(|s| s["id"] == id).map(|s| s["state"].to_string()).unwrap_or_default();
+            if state == "\"idle\"" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(state, "\"idle\"", "the shell reaches idle");
+
         let mut out = Vec::new();
         let outcome = ops::restart(&client, Mode::Now, false, |_| false, &mut out).await.unwrap();
         assert_eq!(outcome, Outcome::NeedsConfirmation);

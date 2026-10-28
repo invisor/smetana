@@ -164,8 +164,8 @@ pub async fn local_work(app: &AppHandle) -> Value {
 ///
 /// **Why the server stops rather than this app.** A reset takes effect only for a process that has
 /// not been refused yet. The process that was refused is the server, so it is the server that has to
-/// be new: it is asked to stop (`server_restart` `stop-when-idle`, which ends nothing and stops at
-/// once when nothing is alive), and the connection loop finds the directory free and starts a fresh
+/// be new: it is asked to stop (`server_restart` `stop-when-idle`, which ends nothing itself and stops
+/// at once when no work is running; agents waiting for a person are not work and end with the stop), and the connection loop finds the directory free and starts a fresh
 /// one from this app, which makes it the app's child again. Not `now`, which re-executes the same
 /// process.
 ///
