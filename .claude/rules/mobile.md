@@ -173,8 +173,9 @@ with a `parent` (`{ id, title }`) and `newTaskIntent` puts its id in `draft.pare
 
 **The three write rows are gated on the desktop's protocol minor.** `TRACKER_WRITES_MINOR = 13` in `taskSheet.js`
 (`canWriteTracker`, read from `bridge.status` as `canAttach` is): a desktop older than 1.13 does not carry
-`tracker_update` and `tracker_delete`, so Block/Unblock, Move to..., Delete and the separator are absent from the
-sheet, not grey; View task, Run, Edit and Follow-up stay. The number moves with the protocol crate, not on its own.
+`tracker_update` and `tracker_delete`, so Block/Unblock, Move to... and Delete are grey, not absent (absent rows read as a
+missing feature), the separator stays, and `sheetNote` puts one caption under the rows (`OLD_SERVER_NOTE`: the
+desktop's server needs a restart); a grey Move to... does not open. The paperclip (`canAttach`) is still absent. The number moves with the protocol crate, not on its own.
 
 **`session:state` and the Agents list come from the server** (protocol 1.12, smetana-ahp9). The bridge carries
 `session_list`, `session:state`, `session:removed` and `terminal:restorable`, and the shared stores mirror them, so the

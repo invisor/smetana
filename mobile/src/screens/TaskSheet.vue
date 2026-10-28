@@ -20,6 +20,8 @@ const props = defineProps({
   card: { type: Object, required: true },
   /* From `sheetRows`. */
   rows: { type: Array, default: () => [] },
+  /* One line under the rows explaining why some are grey, '' for none. */
+  note: { type: String, default: '' },
   /* The tracker's last refusal, '' when there is none. There are no toasts on a phone. */
   error: { type: String, default: '' }
 })
@@ -126,6 +128,12 @@ const failure = {
   font: 'var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans)',
   color: 'var(--status-failed-fg)'
 }
+const noteStyle = {
+  margin: 0,
+  padding: 'var(--space-3) var(--space-4) 0',
+  font: 'var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans)',
+  color: 'var(--text-muted)'
+}
 const back = { kind: 'back', label: 'Back', icon: 'chevron-left' }
 </script>
 
@@ -173,6 +181,7 @@ const back = { kind: 'back', label: 'Back', icon: 'chevron-left' }
           </template>
         </template>
       </div>
+      <p v-if="note" :style="noteStyle">{{ note }}</p>
       <p v-if="error" role="alert" :style="failure">{{ error }}</p>
     </div>
   </div>
