@@ -12,6 +12,7 @@
    thing read here is its branches, which `loadProject` does not load. */
 import { computed, ref, watch } from 'vue'
 import Button from '@src/components/core/Button.vue'
+import Disclosure from '@src/components/core/Disclosure.vue'
 import EmptyState from '@src/components/core/EmptyState.vue'
 import Input from '@src/components/core/Input.vue'
 import Select from '@src/components/core/Select.vue'
@@ -97,6 +98,17 @@ watch(
 )
 const hint = computed(() => (form.value ? branchHint(gitState.branches, form.value.branch) : ''))
 const errors = computed(() => (form.value ? pauseErrors(form.value) : {}))
+const hasErrors = computed(() => Boolean(errors.value.min || errors.value.max))
+
+/* Whether the "Advanced settings" block is folded out. Local and forgotten on every opening (the
+   screen is mounted afresh each time, see Workspace.vue): nothing about it is remembered. */
+const advanced = ref(false)
+
+/* An invalid pause pair forces the block open; remember that as a real open, so fixing the pair
+   does not fold the block away under the person who just fixed it. */
+watch(hasErrors, (bad) => {
+  if (bad) advanced.value = true
+})
 const noLiveCheck = computed(() => !liveCheckAvailable(runsState.config))
 const payload = computed(() =>
   form.value && live.value ? runPayload(form.value, sources(), isQueue.value ? undefined : props.scope) : null
@@ -186,53 +198,61 @@ const full = { width: '100%' }
             <span :style="noteStyle">{{ MODE_NOTE[form.mode] }}</span>
           </div>
 
-          <div :style="row">
-            <span :style="labelStyle">How many at once</span>
-            <Select v-model="form.parallel" :options="PARALLEL" :disabled="starting" :style="full" />
-          </div>
-
-          <div v-if="hasPause(form)" :style="row">
-            <span :style="labelStyle">Pause between batches, min</span>
-            <div :style="pairStyle">
-              <div :style="pairCellStyle">
-                <span :style="noteStyle">From</span>
-                <Input v-model="form.pauseMin" type="number" mono :invalid="Boolean(errors.min)" :disabled="starting" />
-              </div>
-              <div :style="pairCellStyle">
-                <span :style="noteStyle">To</span>
-                <Input v-model="form.pauseMax" type="number" mono :invalid="Boolean(errors.max)" :disabled="starting" />
-              </div>
+          <!-- Held open while the pause pair is invalid, so the error is never hidden behind a fold;
+               Run is already blocked then. -->
+          <Disclosure
+            label="Advanced settings"
+            :open="advanced || hasErrors"
+            @update:open="(v) => { if (!hasErrors) advanced = v }"
+          >
+            <div :style="row">
+              <span :style="labelStyle">How many at once</span>
+              <Select v-model="form.parallel" :options="PARALLEL" :disabled="starting" :style="full" />
             </div>
-            <span v-if="errors.min || errors.max" :style="errorStyle">{{ errors.min || errors.max }}</span>
-            <span v-else :style="noteStyle">{{ PAUSE_NOTE }}</span>
-          </div>
 
-          <div v-if="isQueue" :style="row">
-            <span :style="labelStyle">Take tasks</span>
-            <Select v-model="form.priority" :options="PRIORITIES" :disabled="starting" :style="full" />
-          </div>
+            <div v-if="hasPause(form)" :style="row">
+              <span :style="labelStyle">Pause between batches, min</span>
+              <div :style="pairStyle">
+                <div :style="pairCellStyle">
+                  <span :style="noteStyle">From</span>
+                  <Input v-model="form.pauseMin" type="number" mono :invalid="Boolean(errors.min)" :disabled="starting" />
+                </div>
+                <div :style="pairCellStyle">
+                  <span :style="noteStyle">To</span>
+                  <Input v-model="form.pauseMax" type="number" mono :invalid="Boolean(errors.max)" :disabled="starting" />
+                </div>
+              </div>
+              <span v-if="errors.min || errors.max" :style="errorStyle">{{ errors.min || errors.max }}</span>
+              <span v-else :style="noteStyle">{{ PAUSE_NOTE }}</span>
+            </div>
 
-          <div :style="row">
-            <Switch v-model="form.liveCheck" :disabled="starting || noLiveCheck" :label="LIVE_CHECK_LABEL" />
-            <span v-if="noLiveCheck" :style="noteStyle">{{ LIVE_CHECK_NONE_NOTE }}</span>
-          </div>
+            <div v-if="isQueue" :style="row">
+              <span :style="labelStyle">Take tasks</span>
+              <Select v-model="form.priority" :options="PRIORITIES" :disabled="starting" :style="full" />
+            </div>
 
-          <div :style="row">
-            <Switch v-model="form.fileFindings" :disabled="starting" :label="FINDINGS_LABEL" />
-            <span :style="noteStyle">{{ FINDINGS_NOTE }}</span>
-          </div>
+            <div :style="row">
+              <Switch v-model="form.liveCheck" :disabled="starting || noLiveCheck" :label="LIVE_CHECK_LABEL" />
+              <span v-if="noLiveCheck" :style="noteStyle">{{ LIVE_CHECK_NONE_NOTE }}</span>
+            </div>
 
-          <div :style="row">
-            <span :style="labelStyle">Notes for the agent</span>
-            <Textarea
-              v-model="form.notes"
-              :rows="3"
-              :maxlength="NOTES_MAX"
-              :disabled="starting"
-              :placeholder="NOTES_PLACEHOLDER"
-            />
-            <span :style="noteStyle">{{ NOTES_NOTE }}</span>
-          </div>
+            <div :style="row">
+              <Switch v-model="form.fileFindings" :disabled="starting" :label="FINDINGS_LABEL" />
+              <span :style="noteStyle">{{ FINDINGS_NOTE }}</span>
+            </div>
+
+            <div :style="row">
+              <span :style="labelStyle">Notes for the agent</span>
+              <Textarea
+                v-model="form.notes"
+                :rows="3"
+                :maxlength="NOTES_MAX"
+                :disabled="starting"
+                :placeholder="NOTES_PLACEHOLDER"
+              />
+              <span :style="noteStyle">{{ NOTES_NOTE }}</span>
+            </div>
+          </Disclosure>
 
           <span v-if="isQueue && typeof ready === 'number'" :style="takesStyle">
             {{ ready === 1 ? 'One task is ready.' : `${ready} tasks are ready.` }}
