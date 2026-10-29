@@ -100,8 +100,12 @@ differs from its app's. The build rewrites tracked files under `gen/apple` (taur
 settings into the project; `agvtool new-version -all` stamps the build number into both `Info.plist`s), so the script
 snapshots every tracked file there first and puts it back on exit, success or not. The script finds Xcode itself when
 `xcode-select` points at the Command Line Tools, and puts an `xcodebuild` wrapper first on `PATH`, because tauri runs
-xcodebuild with an explicit environment that drops `DEVELOPER_DIR`. Export compliance (`ITSAppUsesNonExemptEncryption`)
-is deliberately not in `Info.plist`: it is a legal statement a person answers in App Store Connect.
+xcodebuild with an explicit environment that drops `DEVELOPER_DIR`. Export compliance is answered in the app's
+`Info.plist` (and in `project.yml`, which xcodegen rebuilds it from): `ITSAppUsesNonExemptEncryption` is `false`, so App
+Store Connect stops asking on every upload. It is a legal statement and the owner made it (2026-10-29): the app uses
+standard algorithms only (iroh's QUIC/TLS through rustls, the push seal), the mass-market exemption. The key also skips
+the questionnaire's France question; a French encryption declaration (or leaving France out of the storefronts) is still
+owed before the app reaches the public App Store. Do not flip the value without the owner.
 
 The app icon is the desktop's artwork, built for a phone. `mobile/app-icon.png` is the master: 1024 px, opaque, the
 bowl filling the whole square on the artwork's own ground (7, 10, 13), made by `scripts/make-app-icon.py --square`. It is

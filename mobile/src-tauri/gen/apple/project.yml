@@ -64,6 +64,7 @@ targets:
         CFBundleVersion: "0.1.0"
         NSCameraUsageDescription: The camera scans the pairing code shown on your workstation.
         UIBackgroundModes: [remote-notification]
+        ITSAppUsesNonExemptEncryption: false
     entitlements:
       path: smetana-companion_iOS/smetana-companion_iOS.entitlements
       properties:
