@@ -17,6 +17,7 @@ import Input from '@src/components/core/Input.vue'
 import Select from '@src/components/core/Select.vue'
 import Switch from '@src/components/core/Switch.vue'
 import Textarea from '@src/components/core/Textarea.vue'
+import { runFailure } from '@src/components/run/runFailure.js'
 import { scopeBusyReason, scopeLabel } from '@src/components/run/runScopes.js'
 import { runsState, startRun } from '@src/stores/runs.js'
 import { gitState, loadBranches } from '@src/stores/git.js'
@@ -129,7 +130,7 @@ async function start() {
     await startRun(path.value, payload.value)
     emit('started')
   } catch (err) {
-    startFailure.value = typeof err === 'string' ? err : err?.message || 'The run did not start.'
+    startFailure.value = runFailure(err)
   } finally {
     starting.value = false
   }
@@ -206,7 +207,7 @@ const full = { width: '100%' }
             <span v-else :style="noteStyle">{{ PAUSE_NOTE }}</span>
           </div>
 
-          <div :style="row">
+          <div v-if="isQueue" :style="row">
             <span :style="labelStyle">Take tasks</span>
             <Select v-model="form.priority" :options="PRIORITIES" :disabled="starting" :style="full" />
           </div>

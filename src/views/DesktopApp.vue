@@ -454,6 +454,7 @@ import DocumentModeToggle from '../components/files/DocumentModeToggle.vue'
 import { toggleLane } from '../components/files/documentToggle.js'
 import DiffView from '../components/files/editor/DiffView.vue'
 import { keepOnly } from '../components/files/editor/states.js'
+import { runFailure } from '../components/run/runFailure.js'
 
 const props = defineProps({
   theme: { type: String, default: 'dark' },
@@ -2525,26 +2526,6 @@ const startTheRun = async (chosen) => {
   } finally {
     runStarting.value = false
   }
-}
-
-/* Rust's own words, which are already written for a person: the broken-config
-   one names the section that will not parse, and that is the whole of why it is
-   worth showing rather than replacing with something of our own. */
-const runFailure = (err) => {
-  const detail = err?.detail ?? err?.message ?? String(err)
-  if (err?.kind === 'not_configured') return 'This project has no run configuration yet.'
-  /* Named, because "a run is already going" stopped being an answer when a
-     project could hold several: the person has to hear which of them is in the
-     way. The fragment is the worker's own (RunScope::describe), riding in the
-     error's detail. */
-  if (err?.kind === 'already_running') {
-    return `A run over ${err.detail?.scope ?? 'this scope'} is already going in this project.`
-  }
-  /* Deliberately not the sentence above. The run this one is about has stopped
-     — the bar says so in the same breath — and only its loop is still winding
-     down, so claiming a run is going would read as the stop not having taken. */
-  if (err?.kind === 'winding_down') return 'The previous run is still finishing. Try again in a moment.'
-  return detail || 'The run could not be started.'
 }
 
 /* By token, because the button lives on one bar segment and the stop has to

@@ -180,7 +180,7 @@ export function shownRefusal(err) {
 }
 
 /* Why an install did not happen, in words, from `UpdateError`'s `{kind, detail}`
-   — the same shape `runFailure` in `DesktopApp.vue` reads and for the same
+   — the same shape `runFailure` in `components/run/runFailure.js` reads and for the same
    reason: a refusal that cannot say what is in the way sends somebody to guess.
 
    The one that carries somebody else's message (`install`) is passed through as

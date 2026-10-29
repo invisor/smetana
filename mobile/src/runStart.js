@@ -128,7 +128,8 @@ export function runPayload(form, { config, branches }, scope = { kind: 'queue' }
     mode: form.mode,
     target_branch: form.branch,
     create_target: needsCutting(branches, form.branch),
-    min_priority: Number(form.priority),
+    /* A floor belongs to the queue; the server refuses one on a named task or epic. */
+    min_priority: scope.kind === 'queue' ? Number(form.priority) : null,
     max_parallel_tasks: Number(form.parallel),
     batch_pause_min: pause?.min ?? null,
     batch_pause_max: pause?.max ?? null,

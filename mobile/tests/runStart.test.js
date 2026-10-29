@@ -55,6 +55,15 @@ describe('the scope a run is started over', () => {
   })
 })
 
+describe('the priority floor of a run', () => {
+  it('is sent for the queue only, never for a task or an epic', () => {
+    const form = { ...openForm(sources()), priority: '3' }
+    expect(payloadOf(form).min_priority).toBe(3)
+    expect(runPayload(form, { config, branches }, { kind: 'task', id: 'x-1' }).min_priority).toBeNull()
+    expect(runPayload(form, { config, branches }, { kind: 'epic', id: 'x-2' }).min_priority).toBeNull()
+  })
+})
+
 describe('the form when it opens', () => {
   it('holds the dialog\'s own opening values for a project nobody has run before', () => {
     expect(openForm(sources())).toEqual({
