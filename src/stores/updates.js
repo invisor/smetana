@@ -101,7 +101,7 @@ export async function checkForUpdate() {
    this deliberately does not catch it: the refusal is the answer — nothing
    downloaded, a development build, an install that would not go through — and the
    window turns it into a sentence with `installRefusal`. The same division
-   `startRun` keeps with `runFailure` one file over.
+   `startRun` keeps with `runFailure` in `components/run/runFailure.js`.
 
    There is nothing to adopt on success: the app is on its way out. The state
    stays `ready` on a refusal, which is Rust's decision and the right one — what
