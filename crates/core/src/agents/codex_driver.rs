@@ -411,6 +411,7 @@ impl Driver for CodexDriver {
                 Some("turn/completed") => {
                     self.active_turn = None;
                     self.turn_start_pending = false;
+                    self.interrupt_pending = false;
                     // Any ticket still standing belongs to a question this
                     // turn's own end has made moot — Stop rather than Deny or
                     // Allow, say — and `Journal::trim` never drops an
@@ -557,9 +558,13 @@ impl Driver for CodexDriver {
     }
 
     fn interrupt(&mut self) -> Option<Vec<u8>> {
-        let thread_id = self.thread.clone()?;
+        let Some(thread_id) = self.thread.clone() else {
+            // Before the thread/start handshake there is no turn to interrupt.
+            // Codex still supports Stop: the worker must not kill its child.
+            return Some(Vec::new());
+        };
         let Some(turn_id) = self.active_turn.clone() else {
-            if !self.turn_start_pending { return None; }
+            if !self.turn_start_pending { return Some(Vec::new()); }
             self.interrupt_pending = true;
             return Some(Vec::new());
         };
@@ -1227,8 +1232,38 @@ mod tests {
         assert!(String::from_utf8(driver.interrupt().unwrap()).unwrap().contains("turn-one"));
         driver.feed(br#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"durationMs":4}}}
 "#);
-        assert!(driver.interrupt().is_none());
+        assert_eq!(driver.interrupt(), Some(Vec::new()));
         assert!(String::from_utf8(driver.send(Input::Message { text: "again".into(), attachments: vec![] })).unwrap().contains("turn/start"));
+    }
+
+    #[test]
+    fn stopping_an_idle_codex_thread_is_handled_without_killing() {
+        let mut driver = CodexDriver::new(None);
+        driver.thread = Some("thread-a".into());
+        assert_eq!(driver.interrupt(), Some(Vec::new()));
+        assert_eq!(driver.interrupt(), Some(Vec::new()));
+        assert!(driver.outgoing().is_empty());
+    }
+
+    #[test]
+    fn deferred_stop_targets_only_the_turn_whose_start_was_pending() {
+        let mut driver = CodexDriver::new(None);
+        driver.thread = Some("thread-a".into());
+        let first = driver.send(Input::Message { text: "first".into(), attachments: vec![] });
+        let first_id = serde_json::from_slice::<Value>(&first).unwrap()["id"].as_u64().unwrap();
+        assert_eq!(driver.interrupt(), Some(Vec::new()));
+        assert_eq!(driver.interrupt(), Some(Vec::new()));
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":{first_id},\"result\":{{\"turn\":{{\"id\":\"turn-a\"}}}}}}\n").as_bytes());
+        let outgoing = driver.outgoing();
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(serde_json::from_slice::<Value>(&outgoing[0]).unwrap()["params"]["turnId"], "turn-a");
+        driver.feed(br#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn-a","status":"interrupted"}}}
+"#);
+        assert_eq!(driver.interrupt(), Some(Vec::new()));
+        let next = driver.send(Input::Message { text: "second".into(), attachments: vec![] });
+        let next_id = serde_json::from_slice::<Value>(&next).unwrap()["id"].as_u64().unwrap();
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":{next_id},\"result\":{{\"turn\":{{\"id\":\"turn-b\"}}}}}}\n").as_bytes());
+        assert!(driver.outgoing().is_empty(), "a late Stop for A must not interrupt B");
     }
 
     #[test]

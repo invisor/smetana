@@ -71,7 +71,7 @@ import { attachmentAction } from './attachmentAction.js'
 import { approvalText, blockButtonsShown, refusalText } from './autoModeBlock.js'
 import { allowPlan, replyTarget, waitVerdict } from './blockReply.js'
 import { appendQuote, quoteFromSelection } from './draftSegments.js'
-import { isBusy, journalRows } from './journal.js'
+import { composerBusy, isBusy, journalRows } from './journal.js'
 import { SELECTION_MENU_W, selectionMenuItems } from './selectionMenu.js'
 import { LINK_MENU_W, linkAbsolutePath, linkMenuItems } from './linkMenu.js'
 import { signInRowKey } from './signInHint.js'
@@ -227,7 +227,7 @@ onBeforeUnmount(() => {
 })
 
 const state = computed(() => held.value?.state ?? 'starting')
-const busy = computed(() => isBusy(state.value))
+const busy = computed(() => composerBusy(state.value, held.value?.question))
 
 /* Where a relative illustration in a turn's own prose resolves from —
    `Attached::cwd`, the directory this session actually runs in, never the
