@@ -18,10 +18,9 @@
 //! is no equivalent of the terminal's `flush()` dropping a background session's
 //! bytes.
 //!
-//! No unit test lives here, and one is deliberately not added: this is I/O and
-//! orchestration, the standing the three existing workers already have. The
-//! rules that can be checked without a process are in `model.rs` and
-//! `journal.rs`, and each carries its own tests.
+//! Most lifecycle rules are checked without a process in `model.rs` and
+//! `journal.rs`. Stop's child-lifetime contract also has a small process test
+//! here, because a driver result alone cannot prove the worker keeps it alive.
 //!
 //! **One thing here is written to disk, and it is the same file the terminal
 //! worker writes**: `.smetana/agents.json`, through `terminal::restore`. A
@@ -2631,19 +2630,7 @@ fn handle(
             // app-server interrupt. Both keep the child available for the
             // next turn. A harness with no protocol interrupt falls to
             // `start_kill()` below.
-            let bytes = live.talking.as_mut().and_then(|talking| talking.driver.interrupt());
-            match bytes {
-                Some(bytes) => {
-                    if !say(live, bytes) {
-                        lost(ctx, id, live);
-                    }
-                }
-                None => {
-                    if let Some(child) = live.child.as_mut() {
-                        let _ = child.start_kill();
-                    }
-                }
-            }
+            stop_live(ctx, id, live);
             let _ = tx.send(Ok(()));
         }
         Request::Close(id, tx) => {
@@ -2667,6 +2654,24 @@ fn handle(
         }
         // Handled by the caller, which has to `.await` the reply.
         Request::ShutDown(_) => {}
+    }
+}
+
+/// The worker's Stop branch, kept together so the handled-empty driver result
+/// cannot accidentally take the fallback that terminates the process.
+fn stop_live(ctx: &Context, id: SessionId, live: &mut Live) {
+    let bytes = live.talking.as_mut().and_then(|talking| talking.driver.interrupt());
+    match bytes {
+        Some(bytes) => {
+            if !say(live, bytes) {
+                lost(ctx, id, live);
+            }
+        }
+        None => {
+            if let Some(child) = live.child.as_mut() {
+                let _ = child.start_kill();
+            }
+        }
     }
 }
 
@@ -3218,6 +3223,45 @@ fn note_conversation(ctx: &Context, id: SessionId, live: &mut Live, conversation
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn idle_codex_stop_keeps_child_alive_and_accepts_the_next_write() {
+        use tokio::process::Command;
+        use std::process::Stdio;
+
+        let (ctx, _) = tapped();
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = child.stdout.take().unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let writer = tokio::spawn(async move {
+            while let Some(bytes) = rx.recv().await {
+                stdin.write_all(&bytes).await.unwrap();
+            }
+        });
+        let mut live = idle_live("/p", SessionState::Ready);
+        live.child_alive = true;
+        live.child = Some(child);
+        live.talking = Some(Talking {
+            driver: Box::new(CodexDriver::new(None)),
+            stdin: tx,
+        });
+
+        stop_live(&ctx, 7, &mut live);
+        stop_live(&ctx, 7, &mut live);
+        assert!(live.child.as_mut().unwrap().try_wait().unwrap().is_none());
+        assert!(say(&mut live, b"next message\n".to_vec()));
+        let mut echoed = [0; 13];
+        tokio::time::timeout(std::time::Duration::from_secs(2), stdout.read_exact(&mut echoed)).await.unwrap().unwrap();
+        assert_eq!(&echoed, b"next message\n");
+        assert!(live.child.as_mut().unwrap().try_wait().unwrap().is_none());
+
+        live.child.as_mut().unwrap().start_kill().unwrap();
+        live.child.as_mut().unwrap().wait().await.unwrap();
+        drop(live);
+        writer.abort();
+    }
     /// smetana-70uj: a review that names its harness is launched on that pair,
     /// and the snapshot carries it, so the panel does not sign it with the
     /// settings' default. Everything between the intent and `Attached` that

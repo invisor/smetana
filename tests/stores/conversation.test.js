@@ -227,6 +227,31 @@ describe('the conversation store', () => {
     ])
   })
 
+  it('keeps the same session replyable after a completed prose question and a Stop', async () => {
+    const { ipc, stores, emit, nextTick } = await ready({
+      events: [event(1, 'turn-start', { by: 'person' })], seq: 1, state: 'running'
+    })
+    ipc.on('session_send', null)
+    ipc.on('session_stop', null)
+    await stores.conversation.attach(1)
+    await emit('session:events', { id: 1, events: [
+      text(2, 'May I proceed?'),
+      event(3, 'result', { tokens_in: 1, tokens_out: 1, ms: 1 }),
+      event(4, 'text-question')
+    ] })
+    await emit('session:state', { id: 1, state: 'needs-you' })
+    await nextTick()
+    const held = stores.conversation.conversationFor(1)
+    expect(held.question).toBeNull()
+    expect(held.state).toBe('needs-you')
+    held.draft = 'Yes, proceed'
+    await stores.conversation.sendMessage(1, held.draft)
+    expect(ipc.calls('session_send')).toEqual([{ id: 1, text: 'Yes, proceed', attachments: [] }])
+    await stores.conversation.stopConversation(1)
+    expect(ipc.calls('session_stop')).toEqual([{ id: 1 }])
+    expect(ipc.calls('session_close')).toEqual([])
+  })
+
   it('addresses each selected Crew child without mixing its journal or message', async () => {
     const { ipc, stores, emit, nextTick } = await ready()
     const snapshots = {

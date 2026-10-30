@@ -307,6 +307,12 @@ const BUSY = ['running', 'needs-you']
 
 export const isBusy = (state) => BUSY.includes(state)
 
+/* A plain-text question closes the turn but leaves `state_of` at `needs-you`.
+   Only a structured pending request has a card; prose is answered through the
+   composer, so its shared control must remain Send. */
+export const composerBusy = (state, question) =>
+  state === 'running' || (state === 'needs-you' && !!question)
+
 /* Closes an open turn even though nothing in its own events did — the two
    states `state_of` can only reach with the child already dead. Not
    `!isBusy(state)`: `ready` and `starting` are the ordinary skew between

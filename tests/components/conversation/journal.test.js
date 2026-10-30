@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isBusy, journalRows } from '../../../src/components/conversation/journal.js'
+import { composerBusy, isBusy, journalRows } from '../../../src/components/conversation/journal.js'
 
 /* One journal event as the worker writes it: `seq`, `at`, and the kind's own
    fields flattened in beside a kebab-case `kind` — the serde shape of
@@ -719,6 +719,12 @@ describe('a streamed reply', () => {
    whole of a turn — somebody could fire messages into a working agent with no
    way to stop it, and every gate in this repository would stay green. */
 describe('whether the agent is working', () => {
+  it('lets the composer answer a completed prose question without stopping', () => {
+    expect(composerBusy('running', null)).toBe(true)
+    expect(composerBusy('needs-you', null)).toBe(false)
+    expect(composerBusy('needs-you', { id: 'approval' })).toBe(true)
+    expect(composerBusy('ready', null)).toBe(false)
+  })
   it('counts one in a turn, and one holding a question', () => {
     expect(['running', 'needs-you'].map(isBusy)).toEqual([true, true])
   })
