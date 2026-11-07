@@ -243,7 +243,7 @@ const base = computed(() => held.value?.cwd ?? '')
    row alone: a turn the events never closed (`Chunk::Eof` with no `Error`,
    which is what `Stop` itself reaches) is read against it rather than left
    `waiting` forever next to a header that already reads `failed`. */
-const rows = computed(() => journalRows(held.value?.events ?? [], state.value))
+const rows = computed(() => journalRows(held.value?.events ?? [], state.value, held.value?.hideCodexOpening === true))
 
 /* The question the session is waiting on, derived by the store and never stored
    there — see its own note. Drawn at the foot of the panel rather than in the

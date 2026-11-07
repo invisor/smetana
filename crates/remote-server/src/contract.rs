@@ -420,6 +420,7 @@ fn driven_attached() -> Vec<DrivenAttached> {
             // Pinned on the first element only: the key is absent when `None`
             // (protocol 1.5), so the others keep the shape older phones know.
             model: (i == 0).then(|| "opus".to_string()),
+            hide_codex_opening: false,
         })
         .collect()
 }
@@ -636,6 +637,7 @@ fn restorable() -> Vec<Restorable> {
         work: SessionWork::NewTask { text: "Add a thing".into(), issue_type: None, priority: None, parent: None },
         started_at: "2026-10-15T10:00:00Z".into(),
         title: Some("Add a thing".into()),
+        hide_codex_opening: false,
     }]
 }
 

@@ -79,6 +79,10 @@ pub enum EventKind {
     /// panel draws `None` as the session row's own caption, which is the
     /// front end's sentence and is deliberately not written here.
     Opening { text: Option<String>, attachments: Vec<String> },
+    /// Boundary between completed Codex turns read from thread history.
+    /// The panel draws no row; it uses the first boundary to identify the
+    /// original Bare opening when that session is explicitly marked.
+    HistoryTurnEnd,
     /// Markdown as the agent wrote it. Rendering is the front end's business.
     Text { text: String },
     /// A completed plain-text reply whose final paragraph asks the person a

@@ -105,6 +105,15 @@ describe('the conversation store', () => {
     expect(stores.conversation.conversationFor(1).agent).toBe('')
   })
 
+  it('takes the confirmed opening marker from each attach snapshot', async () => {
+    const { ipc, stores } = await ready({ events: [], seq: 0, state: 'ready', agent: 'codex', hideCodexOpening: true })
+    await stores.conversation.attach(1)
+    expect(stores.conversation.conversationFor(1).hideCodexOpening).toBe(true)
+    ipc.on('session_attach', { events: [], seq: 0, state: 'ready', agent: 'codex' })
+    await stores.conversation.attach(1)
+    expect(stores.conversation.conversationFor(1).hideCodexOpening).toBe(false)
+  })
+
   it('carries the model the session was started with off the attach snapshot', async () => {
     const { stores } = await ready({ events: [], seq: 0, state: 'ready', agent: 'codex', model: 'gpt-5' })
     expect(stores.conversation.conversationFor(1).model).toBe('')
