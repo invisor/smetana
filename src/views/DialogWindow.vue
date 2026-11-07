@@ -637,6 +637,33 @@ watch(
   { immediate: true }
 )
 
+/* The first measurement taken by hand rather than waited for, and on Linux it
+   is the only one that ever arrives before the window is shown (smetana-3cc5).
+
+   A `ResizeObserver` delivers during a rendering update, and WebKitGTK runs no
+   rendering update for a view in a window that has never been mapped. This
+   window is built hidden and is shown by the first report alone, so on Ubuntu
+   the observer never fired, `measured` stayed 0, nothing was sent, and the
+   window never appeared: "Set up for runs" and every other dialog did nothing,
+   and a second press focused a window nobody could see. WKWebView on macOS
+   delivers into a hidden window, which is why this went unnoticed there.
+
+   `getBoundingClientRect` forces a layout and needs no rendering update, so it
+   answers in a hidden view. It runs after the guest has rendered (`flush:
+   'post'`), and only while the observer has given nothing. Once the window is
+   up, the observer takes over and corrects this number if fonts or images
+   arriving later move it. The root has no padding or border, so its border box
+   is the content box the observer would have reported. */
+watch(
+  [told, () => props.kind],
+  () => {
+    if (!told.value || measured.value > 0 || !root.value) return
+    const height = Math.ceil(root.value.getBoundingClientRect().height)
+    if (height > 0) measured.value = height
+  },
+  { flush: 'post', immediate: true }
+)
+
 const stops = []
 
 onMounted(async () => {
