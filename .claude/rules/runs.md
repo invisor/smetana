@@ -299,10 +299,10 @@ unmoved board twice running — a dying batch that got as far as claiming one ta
 board moved" is stricter here than progress is in `next_action`, deliberately: this rule ends runs,
 so the closed and parked counts count too.
 
-`queue::release` is the other, and it runs behind **every session the run has finished with**
-rather than only the batch that parks: `in_progress` goes back to `open` with the claim dropped,
-`ready_to_merge` keeps its status and loses only the claim, and the merge lock goes back to `open`
-and unclaimed where — and only where — the app has *proved* the batch's own process group gone.
+`queue::release` is the other, and `service::drive` applies it to eligible leftovers after a
+batch ends rather than only to a batch that parks: `in_progress` goes back to `open` with the claim
+dropped, `ready_to_merge` keeps its status and loses only the claim, and the merge lock goes back
+to `open` and unclaimed where — and only where — the app has *proved* the batch's writers gone.
 Releasing it behind a batch that may still be alive would be releasing it in the middle of
 somebody's merge, which is why every weaker answer refuses; that argument is about a *live* batch and
 does not reach a dead one. Returned rather than parked, and that is the whole distinction: parking
@@ -314,7 +314,7 @@ last part is the one thing the app can say that nobody else will: work committed
 never merged is invisible to the board. The lock is the exception to that too and takes no note at
 all; the paragraph below says why, and it is the reason the branch lookup is skipped for it.
 
-**Two endings are not in that set whole, and each for its own reason.** A hand-back leaves the
+**Four endings need a narrower decision.** A hand-back leaves the
 session alive with a person in it — that is what the mode is for — so nothing of that batch is
 released: the sentence that stops `release` giving back the lock of a batch it cannot show dead
 applies to a task claim word for word, and in Solo the freed task would land back in `ready` and
@@ -332,6 +332,16 @@ order safe — `release` writes nothing but the assignee on a reviewed row, and 
 fresh board filtered on `in_progress` — and `queue::is_reviewed` is the predicate, so
 `ready_to_merge` stays a string that file spells once.
 
+An attended permission wait that reaches its limit (`AnswerTimedOut`) leaves the session and
+all its claims in place so a person can still answer. If Stop cancels a confirmed permission
+prompt (`AnswerCancelled`), `service::drive` releases **all** leftovers, including ordinary task
+claims, only after proving the cancelled batch's writers stopped. It waits briefly for a dying
+Unix process group and refreshes the board because a child may have claimed work while exiting.
+When that proof remains `Unproven`, it calls no `release_claims` at all: releasing an ordinary
+claim could send another lead into a worktree the child is still writing. The claims remain for
+the existing dead-actor recovery path once death can be proved. The journal records the deferral,
+and the batch report names the retained work and says why release was deferred.
+
 **The lock may be written in exactly one way, and it took two tickets to settle which**
 (smetana-dgv, then smetana-rxzd). A batch that stops to ask while it is merging is holding the lock
 `in_progress` under its own actor, which is precisely the shape the parking filter passed: the lock
@@ -346,28 +356,22 @@ good, through the same `queue::is_lock` the snapshot and `left_behind` use.
 batch the app has **proved dead**. That refusal used to be unconditional too, and the other half of
 the same night was the cost: nothing but the lead's own last command ever released the lock, so a
 lead killed mid-merge left it held for ever and the next run stood at a claim nobody was going to
-give up. The proof is the evidence `registry::forget_run` already trusts — `registry::group_is_dead`,
-which is `liveness(group, table(group.pid)) == Liveness::Dead` — and three things about it each cost
-a night if they are loosened. **`Unknown` releases nothing**: the asymmetry `registry.rs` documents
-between `sweep` and `forget_run` is the same instinct pointed at a third cost here, so
-`!= Liveness::Dead` is not rewritten as `== Liveness::Alive` and the reverse is no more allowed.
-**A batch with no recorded `group` releases nothing**, since `group_of` answers `None` both when the
-session is gone and when the terminal worker could not be asked. And **only the lock this batch's own
-actor holds** is touched, which `left_behind`'s filter on the assignee already guarantees — a lock
-held by a lead somebody started by hand is reachable by nothing the app does. The question is asked
-of the batch's recorded **group leader** and never of the record's `writer`, and it is asked at the
-ending rather than reused from the start, where the lead is alive by construction. What it reads is
-that one process — `group.pid` and the stamp beside it — and not the group, which on Unix outlives
-its leader: a lead that exited while something it delegated is still merging answers gone. That is
-the reach of the evidence, named rather than papered over, and the group-wide probe that would close
-it (`killpg(pgid, 0)`) is a decision of its own for `procs.rs`. What keeps the ending that *kills* a
-lead out of this is order rather than the reading: `remove_session` runs after the release, so on an
-unanswered question the lead is still at its dialog and the answer is `Unproven`. The release writes
-`status: open` and an empty assignee and **no note at all** — the lock's issue carries claims and
-releases and nothing else, because any other write moves `updated_at` and makes a dead claim look
+give up. On Unix, `service::batch_life` requires **both** `registry::group_is_dead` for the
+recorded, stamped group leader and `procs::group_is_empty` for its process group. A dead leader
+alone is insufficient: a child may still be compiling or merging after it exits. `Unknown`, a
+missing group identity, or a group probe that cannot positively show emptiness is `Unproven`;
+none authorizes a lock release or release of an `AnswerCancelled` batch's ordinary claims. On
+Windows a positive terminal acknowledgement that its Job Object has ended supplies the equivalent
+writer proof for the cancelled batch. The proof is checked at the ending rather than reused from
+the start, when the lead is alive by construction. **Only the lock this batch's own actor holds**
+is touched, which `left_behind`'s filter on the assignee already guarantees — a lock held by a
+lead somebody started by hand is reachable by nothing the app does. On an unanswered question
+the session is still at its dialog when release is considered, so its lock has no death proof.
+The release writes `status: open` and an empty assignee and **no note at all** — the lock's issue
+carries claims and releases and nothing else, because any other write moves `updated_at` and makes a dead claim look
 fresh to every lead waiting out `merging`'s staleness hour. The run's own document carries the
 sentence instead: `report::LockRelease`, a line under the batch card naming the actor the lock was
-taken from and the evidence it was taken on.
+taken from. The evidence is the precondition for writing that line, not a separate report field.
 
 `usage.rs` is the piece the runs design deliberately left out and then took back. Reading
 `claude -p "/usage"` is a parse of somebody else's prose that can break silently, which is why it was
@@ -783,9 +787,10 @@ app left, which Phase R clears with the worktrees in front of it, while here the
 actor, the session and the moment the batch ended, and nobody else will ever know as much. So the
 loop makes two kinds of bd write and no others — `park_claims` on the unanswered path, one batch's
 `in_progress` claims to `parked` with the question as the note and the merge lock never among them,
-and `release_claims` behind every session the run has finished with, the reviewed half of that same
-unanswered batch included and the lock among them only where the app has proved that batch's process
-group gone. That last set is not "every session that is gone": on the `Stop` arm the session
+and `release_claims` for eligible leftovers after a batch ends, the reviewed half of that same
+unanswered batch included and the lock among them only where the app has proved that batch's writers
+gone. A cancelled permission wait with unproven writer death retains every claim instead.
+That set is not "every session that is gone": on the `Stop` arm the session
 is left alive at its prompt, and the release is safe there not because nothing is running but
 because parking is already writing to that very session's claims and doing strictly more — which is
 also why the lock cannot travel on that arm, its group being alive by construction.
@@ -1041,15 +1046,17 @@ lead outside this app reads a dead holder by, and loosening it without moving `s
 **A batch's liveness is its own `group`, not its record's `writer`.** A
 batch killed mid-merge under an app that is still up leaves a lock its holder will never come back
 for, and the writer being alive says only that the app is; the `writer` stays the signal for a task
-claim, where the question is whether the run still exists to finish what it took. The same reading
-decides the app's own release (smetana-rxzd), which is not a coincidence but the one fact stated
-twice for two readers. Both readings here are the skills' to make and not this side's: the registry
+claim, where the question is whether the run still exists to finish what it took. The app's own
+release requires this leader identity **and** evidence that no group member is still writing on
+Unix (smetana-rxzd). The registry's dead-actor reading remains the skills' to make: the registry
 is a file Phase R and `merging` read, and nothing in it writes to bd. The app's own two bd writes are
 `park_claims` on the unanswered path, which refuses the lock outright through `queue::claimed_by`, and
-`release_claims` behind every session the run has finished with, where `queue::release` gives the lock
-back to `open` on exactly the reading in bold above — the batch's own `group`, read as `Liveness::Dead`
-(smetana-rxzd). So a lock left behind by this app's own killed batch is now usually released by the
-app, and everything else — a lead somebody started by hand, a batch whose group cannot be read — is
+`release_claims` for eligible leftovers after a batch ends, where `queue::release` gives the lock
+back to `open` only after the recorded leader is dead **and** its process group is empty on Unix,
+or the equivalent Windows Job Object termination is acknowledged (smetana-rxzd). A cancelled
+permission wait with unproven writer death retains all its claims. So a lock left behind by this
+app's own killed batch is now usually released by the app, and everything else — a lead somebody
+started by hand, a batch whose group cannot be read — is
 still `smetana:running-tasks` Phase R's or a person's. Both halves were wrong once and each cost its
 own night: until smetana-dgv the parking did not refuse the lock, so a batch killed at a question
 mid-merge left it `parked`, which is worse than released — an unclaimable lock is every later merge
