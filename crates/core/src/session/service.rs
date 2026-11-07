@@ -316,6 +316,9 @@ pub enum Request {
     /// worker's completion channel; it is distinct from removing the tree.
     CrewAwaitExit(u64, oneshot::Sender<crate::terminal::model::Exit>),
     CrewClear(u64),
+    /// Atomically close a Run lead only while this exact permission id is
+    /// open. The worker serialises this with `Answer` and journal updates.
+    CancelPermission(SessionId, String, bool, oneshot::Sender<bool>),
     /// The run worker's word that the batch this Crew package drove has handed
     /// its work back. Fire and forget: any child still `Starting` (never driven
     /// by a transcript of its own) is settled to `Waiting`; the package, its
@@ -2407,6 +2410,29 @@ fn handle(
                 root,
                 crate::terminal::model::Exit::Removed, admitted,
             );
+        }
+        Request::CancelPermission(id, question, crew, tx) => {
+            let open = sessions.get(&id).is_some_and(|live| is_open_question(live.journal.events(), &question));
+            if !open || (crew && (crew_leads.get(&id) != Some(&id) || !crews.contains_key(&id))) {
+                let _ = tx.send(false);
+                return;
+            }
+            if crew {
+                let admitted = !claude_starting.contains_key(&id);
+                clear_crew(
+                    ctx, sessions, crews, crew_ptys, claude_crews, claude_teams, claude_team_baselines,
+                    claude_expected_sessions, claude_bootstrap_members, claude_starting, claude_tails,
+                    claude_lead_tails, claude_transcript_nodes, claude_sent_briefs, crew_leads,
+                    crew_waiters, crew_exits, crew_send_waiters, id,
+                    crate::terminal::model::Exit::Removed, admitted,
+                );
+            } else if let Some(live) = sessions.get_mut(&id) {
+                mark_removed(ctx, id, live);
+                if let Some(child) = live.child.as_mut() {
+                    let _ = child.start_kill();
+                }
+            }
+            let _ = tx.send(true);
         }
         Request::RunStart(project, intent, pinned, tx) => {
             // No `drivable` here: this is the run worker's own door, and the

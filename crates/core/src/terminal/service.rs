@@ -163,7 +163,9 @@ pub enum Request {
     /// tree's menu means. It is checked with `resolve_within` like every other
     /// path this app takes from the front end; see `shell_cwd`.
     CreateShell(String, Option<String>, oneshot::Sender<Result<Session, TerminalError>>),
-    Remove(SessionId, oneshot::Sender<bool>),
+    /// `Some(generation)` removes only while that exact approval is still open.
+    /// The reply is `None` when an answer already won the worker's queue.
+    Remove(SessionId, Option<u64>, oneshot::Sender<Option<bool>>),
     Permission(SessionId, oneshot::Sender<Option<(u64, String)>>),
     Attach(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
     /// The same answer as `Attach`, from a reader that is not the window: it
@@ -1834,7 +1836,13 @@ fn handle(
                 Err(err) => Err(err),
             });
         }
-        Request::Remove(id, tx) => {
+        Request::Remove(id, expected, tx) => {
+            if expected.is_some_and(|generation| !sessions.get(&id).is_some_and(|live| {
+                live.permission_generation == generation && live.permission_question.is_some() && !live.permission_suppressed
+            })) {
+                let _ = tx.send(None);
+                return;
+            }
             let mut terminated_job = false;
             if let Some(mut live) = sessions.remove(&id) {
                 live.pty.kill();
@@ -1869,7 +1877,7 @@ fn handle(
             if *active == Some(id) {
                 *active = None;
             }
-            let _ = tx.send(terminated_job);
+            let _ = tx.send(Some(terminated_job));
         }
         Request::Attach(id, tx) => {
             let _ = tx.send(attach(ctx, sessions, active, id));

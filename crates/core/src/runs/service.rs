@@ -2968,13 +2968,33 @@ async fn remove_session(transport: &RunTransport, session: u64) -> bool {
     let (tx, rx) = oneshot::channel();
     if terminal
         .0
-        .send(TerminalRequest::Remove(session, tx))
+        .send(TerminalRequest::Remove(session, None, tx))
         .await
         .is_ok()
     {
-        return rx.await.unwrap_or(false);
+        return rx.await.ok().flatten().unwrap_or(false);
     }
     false
+}
+
+/// Check one prompt id and close the child in a single worker request. An
+/// answer queued first wins, and Stop then follows the cooperative path.
+async fn cancel_permission(transport: &RunTransport, session: u64, id: &str) -> Option<bool> {
+    match transport {
+        RunTransport::Pty(terminal) => {
+            let generation = id.strip_prefix(&format!("pty:{session}:"))?.parse().ok()?;
+            let (tx, rx) = oneshot::channel();
+            terminal.0.send(TerminalRequest::Remove(session, Some(generation), tx)).await.ok()?;
+            rx.await.ok().flatten()
+        }
+        RunTransport::Driven { session: driven, run } => {
+            let (tx, rx) = oneshot::channel();
+            driven.0.send(crate::session::service::Request::CancelPermission(
+                session, id.to_owned(), run.transport == Transport::DrivenCrew, tx,
+            )).await.ok()?;
+            rx.await.ok()?.then_some(false)
+        }
+    }
 }
 
 /// May another batch go out? The worker answers, and the answer is the decision
@@ -3221,9 +3241,8 @@ async fn watch_batch(
                 exit = &mut ended => return Batch::Ended(exit),
                 _ = stop.recv(), if waiting.is_some() => {
                     let pending = waiting.take().expect("stop is polled only while waiting").0;
-                    if asking(transport, run, session).await.as_ref().is_some_and(|open| open.id == pending.id) {
+                    if let Some(terminal_ack) = cancel_permission(transport, session, &pending.id).await {
                         journal.say(&format!("batch {batch} permission wait cancelled id={:?} question={:?} account=no", pending.id, pending.question));
-                        let terminal_ack = remove_session(transport, session).await;
                         return Batch::AnswerCancelled { question: pending.question, terminal_ack };
                     }
                     // The answer won the race with Stop. Keep the batch alive
@@ -4450,6 +4469,9 @@ mod tests {
         exit: oneshot::Sender<Exit>,
         states: mpsc::UnboundedReceiver<RunState>,
         removed: mpsc::UnboundedReceiver<()>,
+        cancel_seen: mpsc::UnboundedReceiver<()>,
+        hold_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        resume_cancel: std::sync::Arc<tokio::sync::Notify>,
         result: tokio::task::JoinHandle<(Batch, Run)>,
         _dir: tempfile::TempDir,
     }
@@ -4468,6 +4490,11 @@ mod tests {
         ));
         let (terminal_tx, mut terminal_rx) = mpsc::channel(16);
         let (removed_tx, removed) = mpsc::unbounded_channel();
+        let (cancel_seen_tx, cancel_seen) = mpsc::unbounded_channel();
+        let hold_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let resume_cancel = std::sync::Arc::new(tokio::sync::Notify::new());
+        let hold_for_worker = hold_cancel.clone();
+        let resume_for_worker = resume_cancel.clone();
         let (exit_tx, exit_rx) = oneshot::channel();
         let prompt_for_worker = prompt.clone();
         tokio::spawn(async move {
@@ -4483,9 +4510,19 @@ mod tests {
                             let _ = tx.send(exit.await.unwrap_or(Exit::NoCode));
                         });
                     }
-                    TerminalRequest::Remove(7, tx) => {
-                        let _ = removed_tx.send(());
-                        let _ = tx.send(true);
+                    TerminalRequest::Remove(7, expected, tx) => {
+                        let _ = cancel_seen_tx.send(());
+                        if hold_for_worker.load(std::sync::atomic::Ordering::SeqCst) {
+                            resume_for_worker.notified().await;
+                        }
+                        let still_open = prompt_for_worker.lock().unwrap().as_ref()
+                            .is_some_and(|(generation, _)| expected == Some(*generation));
+                        if expected.is_some() && !still_open {
+                            let _ = tx.send(None);
+                        } else {
+                            let _ = removed_tx.send(());
+                            let _ = tx.send(Some(true));
+                        }
                     }
                     _ => panic!("unexpected terminal request"),
                 }
@@ -4524,6 +4561,9 @@ mod tests {
             exit: exit_tx,
             states,
             removed,
+            cancel_seen,
+            hold_cancel,
+            resume_cancel,
             result,
             _dir: dir,
         }
@@ -4594,6 +4634,23 @@ mod tests {
             "the answer converts Stop to the cooperative path"
         );
         assert!(answered.removed.try_recv().is_err());
+
+        // Stop has already entered the worker queue when the answer lands.
+        // The worker checks and closes in one handler, so it refuses the
+        // cancellation and leaves the approved tool running.
+        let mut racing = watched_pty(Some((1, "command approval")), false);
+        assert!(matches!(next_state(&mut racing.states).await, RunState::WaitingForAnswer { .. }));
+        racing.hold_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        racing.stop.send(()).await.unwrap();
+        racing.cancel_seen.recv().await.expect("Stop reached the worker");
+        *racing.prompt.lock().unwrap() = None;
+        racing.resume_cancel.notify_one();
+        assert!(matches!(next_state(&mut racing.states).await, RunState::Working { .. }));
+        racing.exit.send(Exit::Code(0)).unwrap();
+        let (batch, run) = racing.result.await.unwrap();
+        assert!(matches!(batch, Batch::Ended(Exit::Code(0))));
+        assert!(run.stopping);
+        assert!(racing.removed.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -4642,6 +4699,80 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }).await.expect("a reaped group becomes safe to release");
+        worker.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn codex_crew_answer_winning_the_cancel_queue_keeps_the_batch_alive() {
+        use crate::session::model::{Decision, Event, EventKind};
+        let dir = tempfile::tempdir().unwrap();
+        let event = |seq, kind| Event { seq, at: String::new(), kind };
+        let events = std::sync::Arc::new(std::sync::Mutex::new(vec![event(1, EventKind::Permission {
+            id: "p1".into(), tool: "exec_command".into(), detail: "git status".into(),
+            options: vec![Decision::Allow, Decision::Deny], input: serde_json::Value::Null,
+        })]));
+        let (tx, mut rx) = mpsc::channel(16);
+        let (cancel_seen_tx, mut cancel_seen) = mpsc::unbounded_channel();
+        let resume_cancel = std::sync::Arc::new(tokio::sync::Notify::new());
+        let resume_for_worker = resume_cancel.clone();
+        let events_for_worker = events.clone();
+        let (exit_tx, exit_rx) = oneshot::channel();
+        let worker = tokio::spawn(async move {
+            let mut exit_rx = Some(exit_rx);
+            while let Some(request) = rx.recv().await {
+                match request {
+                    crate::session::service::Request::CrewAttach(7, 7, reply) => {
+                        let snapshot = crate::session::service::CrewAttached {
+                            events: events_for_worker.lock().unwrap().clone(), seq: 1,
+                            state: crate::session::crew::CrewState::Waiting, cwd: String::new(),
+                        };
+                        let _ = reply.send(Ok(snapshot));
+                    }
+                    crate::session::service::Request::CrewAwaitExit(7, reply) => {
+                        let exit = exit_rx.take().unwrap();
+                        tokio::spawn(async move { let _ = reply.send(exit.await.unwrap_or(Exit::NoCode)); });
+                    }
+                    crate::session::service::Request::CancelPermission(7, id, true, reply) => {
+                        let _ = cancel_seen_tx.send(());
+                        resume_for_worker.notified().await;
+                        let open = crate::session::model::is_open_question(&events_for_worker.lock().unwrap(), &id);
+                        let _ = reply.send(open);
+                    }
+                    _ => panic!("unexpected Crew request"),
+                }
+            }
+        });
+        let mut options = settings(RunScope::Queue);
+        options.mode = RunMode::Supervised;
+        let mut run = Run::new(1, dir.path().to_string_lossy().into_owned(), options);
+        run.working_in(7);
+        run.advance(RunState::Working { iteration: 0 });
+        let transport = RunTransport::Driven {
+            session: SessionHandle(tx),
+            run: RunSession { profile: "codex".into(), provider: "Codex".into(), transport: Transport::DrivenCrew },
+        };
+        let journal = Journal::open(dir.path(), 1, chrono::Local::now());
+        let (state_tx, mut states) = mpsc::unbounded_channel();
+        let (stop_tx, mut stop) = mpsc::channel(1);
+        let reports = dir.path().to_path_buf();
+        let watched = tokio::spawn(async move {
+            let say = |run: &Run| { let _ = state_tx.send(run.state.clone()); };
+            let batch = watch_batch(&transport, &mut run, 7, &reports, 1, &say, &journal, &mut stop,
+                Duration::from_millis(5)).await;
+            (batch, run)
+        });
+        assert!(matches!(next_state(&mut states).await, RunState::WaitingForAnswer { .. }));
+        stop_tx.send(()).await.unwrap();
+        cancel_seen.recv().await.expect("cancel was queued behind the prompt");
+        events.lock().unwrap().push(event(2, EventKind::PermissionAnswered {
+            id: "p1".into(), decision: Decision::Allow, answers: None,
+        }));
+        resume_cancel.notify_one();
+        assert!(matches!(next_state(&mut states).await, RunState::Working { .. }));
+        exit_tx.send(Exit::Code(0)).unwrap();
+        let (batch, run) = watched.await.unwrap();
+        assert!(matches!(batch, Batch::Ended(Exit::Code(0))));
+        assert!(run.stopping);
         worker.await.unwrap();
     }
 }

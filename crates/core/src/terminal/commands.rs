@@ -87,7 +87,7 @@ pub async fn terminal_shell(
 }
 
 pub async fn terminal_remove(handle: &TerminalHandle, id: SessionId) -> Result<(), TerminalError> {
-    ask(&handle, |tx| Request::Remove(id, tx)).await.map(|_| ())
+    ask(&handle, |tx| Request::Remove(id, None, tx)).await.map(|_| ())
 }
 
 
