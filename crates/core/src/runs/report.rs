@@ -609,6 +609,15 @@ fn stop_reason_line(reason: &StopReason) -> String {
             "The run stopped at a question it had nobody to answer: &ldquo;{}&rdquo;",
             escape(question)
         ),
+        StopReason::PermissionTimedOut { question } => format!(
+            "The run stopped after waiting {} minutes for a permission answer: &ldquo;{}&rdquo;. The agent session remains available to answer it.",
+            super::model::ANSWER_WAIT_MINUTES,
+            escape(question)
+        ),
+        StopReason::PermissionCancelled { question } => format!(
+            "The run stopped and cancelled the agent session while it waited for permission: &ldquo;{}&rdquo;.",
+            escape(question)
+        ),
         StopReason::NothingDone { batches } => format!(
             "The run stopped: {} in a row came back having done nothing at all.",
             if *batches == 1 { "one batch".to_string() } else { format!("{batches} batches") }
@@ -650,7 +659,7 @@ fn outcome_line(outcome: &BatchOutcome) -> (Tone, String) {
         BatchOutcome::Unanswered { question } => (
             Tone::NeedsYou,
             format!(
-                "The run ended this batch at a question it had nobody to answer: &ldquo;{}&rdquo;",
+                "The run ended this batch while its session waited for an answer: &ldquo;{}&rdquo;",
                 escape(question)
             ),
         ),
@@ -907,6 +916,19 @@ mod tests {
         assert!(html.contains("a-1"), "and the board still says which task moved");
     }
 
+    #[test]
+    fn a_closed_task_remains_visible_when_permission_prevented_the_batch_account() {
+        let mut blocked = batch(1);
+        blocked.reported = false;
+        blocked.outcome = BatchOutcome::Unanswered { question: "command: curl example.test".into() };
+        let tasks = Tasks { closed: vec![line("frontend-92e.5")], parked: vec![] };
+        let reason = StopReason::PermissionTimedOut { question: "command: curl example.test".into() };
+        let html = render(&RunReport { stop_reason: &reason, ..report(1800, Some(&tasks), &[blocked]) });
+        assert!(html.contains("frontend-92e.5"));
+        assert!(html.contains("left no account of itself"));
+        assert!(html.contains("waiting 30 minutes for a permission answer"));
+    }
+
     /// The whole `StopReason` vocabulary, one representative value per
     /// variant — `Crashed`, `NeedsAnswer`, `NothingDone` and `Preflight` all
     /// carry a payload, so each gets a value rather than standing for a shape.
@@ -921,6 +943,8 @@ mod tests {
             StopReason::Cancelled,
             StopReason::SessionRemoved,
             StopReason::NeedsAnswer { question: "Trust this folder?".into() },
+            StopReason::PermissionTimedOut { question: "Allow curl?".into() },
+            StopReason::PermissionCancelled { question: "Allow curl?".into() },
             StopReason::NothingDone { batches: 2 },
             StopReason::Preflight { detail: "npm install exited 127".into() },
         ]

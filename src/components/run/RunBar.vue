@@ -42,7 +42,7 @@ const props = defineProps({
   canRelease: { type: Boolean, default: true }
 })
 
-defineEmits(['stop', 'release'])
+defineEmits(['stop', 'release', 'answer'])
 
 const state = computed(() => props.run?.state ?? null)
 const over = computed(() => state.value?.kind === 'stopped')
@@ -52,6 +52,8 @@ const paused = computed(() => state.value?.kind === 'paused')
    anyway", which is the release of a threshold and has nothing to release here. */
 const resting = computed(() => state.value?.kind === 'resting')
 const waiting = computed(() => ['waiting_for_agent', 'waiting_for_any_agent'].includes(state.value?.kind))
+const waitingForAnswer = computed(() => state.value?.kind === 'waiting_for_answer')
+const answerable = computed(() => waitingForAnswer.value || (over.value && state.value?.reason?.kind === 'permission_timed_out'))
 
 /* What an ending says, in what colour, under what glyph: `stopReason.js`, pure
    and next door, because a table of which endings read as failures is worth a
@@ -72,7 +74,7 @@ const glyph = computed(() => {
      would be a second copy of a decision that lives next door. */
   if (over.value) return reason.value.icon
   if (warming.value) return 'loader-circle'
-  return (paused.value || waiting.value || resting.value) ? 'pause' : 'play'
+  return waitingForAnswer.value ? 'message-circle-question-mark' : (paused.value || waiting.value || resting.value) ? 'pause' : 'play'
 })
 
 /* The one state that may be drawn without words: a second and a third run
@@ -103,6 +105,8 @@ const label = computed(() => {
       return 'Reading the board'
     case 'working':
       return `Batch ${(props.run.batches ?? 0) || 1}`
+    case 'waiting_for_answer':
+      return 'Waiting for permission'
     /* Named as the subscription's and not as an error: nothing failed, and
        nobody is being asked to do anything. The percentage is here rather than
        in the detail because it is the whole of what happened. */
@@ -128,6 +132,7 @@ const detail = computed(() => {
      is `endingDetail`'s, next door and pinned by its own tests. */
   if (mute.value) return ''
   if (over.value) return endingDetail(state.value.reason, branch.value)
+  if (waitingForAnswer.value) return state.value.question
   /* While paused the branch is the least of what somebody needs: they came to
      find out when this picks up again, and the harness's own sentence about the
      reset is the only thing that answers it. Without one, say that the run is
@@ -150,6 +155,7 @@ const detail = computed(() => {
 })
 
 const tone = computed(() => {
+  if (waitingForAnswer.value) return TONE.needsYou
   if (!over.value) return 'var(--text-primary)'
   /* An ending that names no tone of its own is drawn as the ordinary one: red
      is a claim about what happened, and an omission has not made it. */
@@ -188,17 +194,21 @@ const detailStyle = {
          glyph and the buttons of a muted segment twice as far apart as a
          speaking one. -->
     <span v-if="label" :style="{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }">{{ label }}</span>
-    <span v-if="detail && !reason.bare" :style="detailStyle">{{ detail }}</span>
-    <!-- The label says what stopping actually does rather than "Stop the run":
-         the wrapper `Tooltip` that used to say it is gone, since `IconButton`
-         draws its own now and two would draw two panels. It is the accessible
-         name as well as the hint, and both are better for the precision — the
-         button does not stop the run where it stands, it stops it after the
-         batch in flight. -->
+    <span v-if="detail && !reason.bare" :style="detailStyle" :title="detail">{{ detail }}</span>
+    <!-- A working batch stops cooperatively after it finishes. A batch held at
+         a permission request can cancel that waiting call immediately. The
+         button's accessible label names whichever action applies. -->
     <!-- Beside Stop and before it, in the reading order of the sentence it
          answers: the bar has just said the run is paused, and this is the other
          thing that can be done about it. `play` is the direct pair of the
          `pause` glyph already drawn at the head of the segment. -->
+    <IconButton
+      v-if="answerable"
+      icon="message-circle-question-mark"
+      label="Open agent to answer"
+      size="sm"
+      @click="$emit('answer')"
+    />
     <IconButton
       v-if="releasable"
       icon="play"
@@ -210,7 +220,7 @@ const detailStyle = {
     <IconButton
       v-if="!over"
       icon="square"
-      :label="run.stopping ? 'Stopping after this batch' : 'Stop after this batch'"
+      :label="waitingForAnswer ? 'Cancel permission and stop now' : run.stopping ? 'Stopping after this batch' : 'Stop after this batch'"
       size="sm"
       :disabled="busy || run.stopping"
       @click="$emit('stop')"

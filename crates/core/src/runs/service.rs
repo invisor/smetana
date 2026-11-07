@@ -84,15 +84,19 @@ const MAX_CRASHES: u32 = 5;
 const MAX_EMPTY_BATCHES: u32 = 3;
 const CRASH_BACKOFF_BASE: Duration = Duration::from_secs(5);
 const CRASH_BACKOFF_MAX: Duration = Duration::from_secs(60);
-/// How often the wait on a batch asks what the session's own state is. Only an
-/// unattended run asks at all — see `watch_batch`.
+/// How often the wait on a batch asks what the session's own state is. Auto
+/// uses it to park an unanswered batch; attended runs use it to surface an
+/// open permission request and bound only that wait — see `watch_batch`.
 ///
 /// Slow on purpose: what it is looking for stands until somebody answers it, so
-/// nothing is lost by taking two of these to see it, and every tick costs the
-/// terminal worker a clone of the project's session list. A dialog therefore
+/// nothing is lost by taking two of these to see it, and every tick costs a
+/// clone of the terminal's session list or the driven session's bounded journal. A dialog therefore
 /// costs its batch about ten seconds after it is drawn, against the for ever it
 /// used to take.
 const ASK_POLL: Duration = Duration::from_secs(5);
+/// Only a confirmed, continuously open question spends this allowance. An
+/// ordinary long batch can run for any length of time.
+const ANSWER_WAIT_LIMIT: Duration = Duration::from_secs(super::model::ANSWER_WAIT_MINUTES * 60);
 /// How many runs of one project may end in the same second before a report has
 /// nowhere to go. A ceiling rather than an endless walk, since every step is a
 /// syscall; a project would need twenty live runs stopping together to reach it.
@@ -1332,7 +1336,7 @@ async fn drive(
         run.advance(RunState::Working { iteration });
         say(&run);
 
-        let outcome = watch_batch(&transport, &run, session, &account.reports, batch_no).await;
+        let outcome = watch_batch(&transport, &mut run, session, &account.reports, batch_no, &say, &account.journal, &mut stop).await;
         // Read here rather than at the ending, so that a batch's account is
         // taken while it is the freshest thing on disk and every way out of the
         // match below is covered by one read instead of three.
@@ -1639,6 +1643,8 @@ async fn drive(
             // may now move is the `Ended` arm below, and only on `life`, since
             // the session here is left sitting at its prompt with somebody
             // about to answer it.
+            Batch::AnswerTimedOut { .. } => None,
+            Batch::AnswerCancelled { .. } => None,
             Batch::Unanswered { .. } => {
                 let reviewed: Vec<queue::Leftover> =
                     leftovers.iter().filter(|left| queue::is_reviewed(left)).cloned().collect();
@@ -1728,6 +1734,17 @@ async fn drive(
                     return;
                 }
             },
+            Batch::AnswerTimedOut { question } => {
+                // The person may still answer this session's own permission
+                // card. Keep its claims and the session intact; the report
+                // records the missing account and the explicit ending.
+                finish(&mut run, StopReason::PermissionTimedOut { question }, &say, &account, &root, &tracker).await;
+                return;
+            }
+            Batch::AnswerCancelled { question } => {
+                finish(&mut run, StopReason::PermissionCancelled { question }, &say, &account, &root, &tracker).await;
+                return;
+            }
         };
         // A session somebody removed from the agents panel is not a harness
         // that fell over: nothing is going to go better on the next try, and
@@ -2205,6 +2222,8 @@ fn outcome_of(batch: &Batch) -> BatchOutcome {
         Batch::Ended(Exit::Removed) => BatchOutcome::Removed,
         Batch::HandedBack => BatchOutcome::HandedBack,
         Batch::Unanswered { question } => BatchOutcome::Unanswered { question: question.clone() },
+        Batch::AnswerTimedOut { question } => BatchOutcome::Unanswered { question: question.clone() },
+        Batch::AnswerCancelled { question } => BatchOutcome::Unanswered { question: question.clone() },
     }
 }
 
@@ -3081,10 +3100,15 @@ pub(super) enum Batch {
     /// The session stopped to ask a person something, in a run that has no
     /// person in it.
     Unanswered { question: String },
+    /// A person could answer, but the confirmed request remained open beyond
+    /// the permission wait limit. The session is retained for that answer.
+    AnswerTimedOut { question: String },
+    /// Stop while a permission is open cancels the waiting call immediately.
+    AnswerCancelled { question: String },
 }
 
-/// Wait for the batch to end — and, where nobody is watching, for the session
-/// to stop and ask instead.
+/// Wait for the batch to end. A confirmed question either parks an unattended
+/// batch or makes an attended batch visibly wait for its answer.
 ///
 /// `await_exit` alone waits on the **process**, and a session sitting at a
 /// dialog never exits. Codex draws "Do you trust the contents of this
@@ -3099,12 +3123,12 @@ pub(super) enum Batch {
 /// batch's claims and carries on, and only the same question twice in a row
 /// ends the run.
 ///
-/// What it watches is the state the terminal worker already keeps for every
-/// session, active or not, asked for over the channel every other caller uses.
-/// Nothing about detection changes and nothing is added to that worker.
+/// On the PTY road it watches the terminal worker's parsed question. On the
+/// driven road it reads the session journal's open `Permission` event. Both
+/// already power the agent panel's own answer controls.
 ///
-/// **Only a question a profile actually read counts**, never `needs-you` on its
-/// own. Layer A raises that state from a bell alone, a CLI rings one on
+/// **Only an actual question counts**, never `needs-you` on its own. On the
+/// PTY road Layer A raises that state from a bell alone, a CLI rings one on
 /// finishing a task as readily as on asking something, and a run's session is
 /// nobody's on screen — so its bell is never acknowledged and would stand for
 /// the rest of the session's life. Ending a run on that would end it on the
@@ -3112,13 +3136,16 @@ pub(super) enum Batch {
 /// a person can be told anything useful about.
 async fn watch_batch(
     transport: &RunTransport,
-    run: &Run,
+    run: &mut Run,
     session: u64,
     reports: &Path,
     batch: u32,
+    say: &impl Fn(&Run),
+    journal: &Journal,
+    stop: &mut mpsc::Receiver<()>,
 ) -> Batch {
     let mut ended = std::pin::pin!(await_exit(transport, session));
-    // A supervised or solo run has somebody who can answer in the terminal, and
+    // A supervised or solo run has somebody who can answer in its session, and
     // that is the mode's whole point — ending their run at the first question
     // would be taking it away from them. See `RunMode::unattended`.
     //
@@ -3135,9 +3162,18 @@ async fn watch_batch(
     // exit — because the person typed `/exit`, or the harness ended on its own —
     // ends the batch exactly as it always did.
     if !run.settings.mode.unattended() {
+        let iteration = match run.state { RunState::Working { iteration } => iteration, _ => 0 };
+        let mut asked = Asked::default();
+        let mut waiting: Option<(String, Instant)> = None;
         loop {
             tokio::select! {
                 exit = &mut ended => return Batch::Ended(exit),
+                _ = stop.recv(), if waiting.is_some() => {
+                    let question = waiting.take().expect("stop is polled only while waiting").0;
+                    journal.say(&format!("batch {batch} permission wait cancelled question={question:?} account=no"));
+                    remove_session(transport, session).await;
+                    return Batch::AnswerCancelled { question };
+                }
                 _ = tokio::time::sleep(ASK_POLL) => {
                     if handed_back(reports, batch) {
                         // Tell a Crew package its batch is over, so a child
@@ -3156,6 +3192,27 @@ async fn watch_batch(
                             }
                         }
                         return Batch::HandedBack;
+                    }
+                    let seen = asking(transport, run, session).await;
+                    if let Some(question) = asked.confirm(seen.as_deref()) {
+                        match &waiting {
+                            Some((previous, since)) if previous == &question => {
+                                if permission_wait_expired(*since, Instant::now()) {
+                                    journal.say(&format!("batch {batch} permission wait expired question={question:?} account=no"));
+                                    return Batch::AnswerTimedOut { question };
+                                }
+                            }
+                            _ => {
+                                journal.say(&format!("batch {batch} waiting for permission question={question:?}"));
+                                waiting = Some((question.clone(), Instant::now()));
+                                run.advance(RunState::WaitingForAnswer { question });
+                                say(run);
+                            }
+                        }
+                    } else if seen.is_none() && waiting.take().is_some() {
+                        journal.say(&format!("batch {batch} permission wait resolved"));
+                        run.advance(RunState::Working { iteration });
+                        say(run);
                     }
                 }
             }
@@ -3182,16 +3239,41 @@ async fn watch_batch(
 /// or that is loud with nothing readable behind it — the last of those is the
 /// bell case, and it is deliberately not evidence of anything here.
 async fn asking(transport: &RunTransport, run: &Run, session: u64) -> Option<String> {
-    let RunTransport::Pty(terminal) = transport else { return None };
-    let (tx, rx) = oneshot::channel();
-    terminal.0.send(TerminalRequest::List(run.project.clone(), tx)).await.ok()?;
-    rx.await
-        .ok()?
-        .into_iter()
-        .find(|s| s.id == session)
-        .filter(|s| s.state == SessionState::NeedsYou)
-        .and_then(|s| s.question)
-        .map(|question| question.text)
+    match transport {
+        RunTransport::Pty(terminal) => {
+            let (tx, rx) = oneshot::channel();
+            terminal.0.send(TerminalRequest::List(run.project.clone(), tx)).await.ok()?;
+            rx.await.ok()?.into_iter().find(|s| s.id == session)
+                .filter(|s| s.state == SessionState::NeedsYou)
+                .and_then(|s| s.question).map(|question| question.text)
+        }
+        RunTransport::Driven { session: driven, .. } => {
+            let (tx, rx) = oneshot::channel();
+            driven.0.send(crate::session::service::Request::Attach(session, tx)).await.ok()?;
+            pending_permission(&rx.await.ok()?.ok()?.events)
+        }
+    }
+}
+
+fn permission_wait_expired(since: Instant, now: Instant) -> bool {
+    now.duration_since(since) >= ANSWER_WAIT_LIMIT
+}
+
+/// The driven journal is the source of truth for open permission cards: an
+/// answer, denial or cancellation appends `PermissionAnswered` under the same
+/// id, and the session worker relays the decision to the waiting tool call.
+fn pending_permission(events: &[crate::session::model::Event]) -> Option<String> {
+    let mut open = std::collections::BTreeMap::new();
+    for event in events {
+        match &event.kind {
+            crate::session::model::EventKind::Permission { id, tool, detail, .. } => {
+                open.insert(id.clone(), format!("{tool}: {detail}"));
+            }
+            crate::session::model::EventKind::PermissionAnswered { id, .. } => { open.remove(id); }
+            _ => {}
+        }
+    }
+    open.into_values().next()
 }
 
 /// A terminal worker that is not there to answer counts as a batch that ended
@@ -3935,6 +4017,12 @@ mod tests {
         assert_eq!(killed.outcome, BatchOutcome::NoCode, "and the run's own half is there anyway");
         assert!(killed.left_behind.is_empty(), "the board is the caller's to ask about");
 
+        let timed_out = read_batch(&dir, 3, 1800, outcome_of(&Batch::AnswerTimedOut {
+            question: "command: curl example.test".into(),
+        }));
+        assert!(!timed_out.reported, "a permission timeout still records the missing batch account");
+        assert_eq!(timed_out.outcome, BatchOutcome::Unanswered { question: "command: curl example.test".into() });
+
         std::fs::write(dir.join("batch-2.json"), "{\"tasks\": [], \"notes\": \"fine\"}")
             .expect("an account");
         let spoke = read_batch(&dir, 2, 90, BatchOutcome::Exited);
@@ -3942,6 +4030,33 @@ mod tests {
         assert_eq!(spoke.outcome, BatchOutcome::Exited, "and the two halves stand together");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_driven_permission_remains_open_only_until_its_own_answer() {
+        use crate::session::model::{Decision, Event, EventKind};
+        let event = |seq, kind| Event { seq, at: String::new(), kind };
+        let question = event(1, EventKind::Permission {
+            id: "p1".into(), tool: "command".into(), detail: "curl example.test".into(),
+            options: vec![Decision::Allow, Decision::Deny], input: serde_json::Value::Null,
+        });
+        assert_eq!(pending_permission(&[question.clone()]).as_deref(), Some("command: curl example.test"));
+        for decision in [Decision::Allow, Decision::Deny] {
+            let answered = event(2, EventKind::PermissionAnswered { id: "p1".into(), decision, answers: None });
+            assert_eq!(pending_permission(&[question.clone(), answered]), None);
+        }
+    }
+
+    #[test]
+    fn only_a_continuously_open_permission_expires() {
+        let now = Instant::now();
+        assert!(!permission_wait_expired(now, now + Duration::from_secs(60)));
+        assert!(permission_wait_expired(now, now + ANSWER_WAIT_LIMIT));
+        let mut asked = Asked::default();
+        assert_eq!(asked.confirm(Some("Allow curl?")), None);
+        assert_eq!(asked.confirm(Some("Allow curl?")), Some("Allow curl?".into()));
+        assert_eq!(asked.confirm(None), None, "an answered question clears confirmation");
+        assert_eq!(asked.confirm(Some("Allow curl?")), None, "a later prompt starts a fresh wait");
     }
 
     #[test]
