@@ -70,13 +70,39 @@ The two sides fail unequally, and the script's side is the quiet one: change the
 push matches no trigger, the script prints its success line and nothing builds. `npm test` cannot see
 the workflow and `cargo test` cannot see the script.
 
-The `release` job then builds a macOS arm64 bundle — one matrix row, because
-`scripts/fetch-bd.mjs` fetches the sidecar for the host triple and `bundle.externalBin` looks it up
-by the build target's — and publishes a GitHub release holding the `.dmg`, the `.app.tar.gz` an
-updater installs, its `.sig`, and `latest.json`. That last is what `plugins.updater.endpoints` points
-at — `https://github.com/invisor/smetana/releases/latest/download/latest.json`, reachable with no
-token because this repository is public, and the reason `releaseDraft` and `prerelease` are both
-false: that URL resolves against the latest **published** release only.
+The `release` job builds native macOS arm64 and Linux x86_64 bundles. Linux builds on Ubuntu
+22.04 with explicit AppImage and .deb targets. `scripts/fetch-bd.mjs` fetches the sidecar for the
+host triple and `bundle.externalBin` looks it up by the build target's, so each row runs natively.
+The shared GitHub release holds the macOS `.dmg`, its signed `.app.tar.gz` updater, the Linux
+`.AppImage` and `.deb`, their signed updater assets, and one `latest.json`. That feed is what
+`plugins.updater.endpoints` points at — `https://github.com/invisor/smetana/releases/latest/download/latest.json`,
+reachable with no token because this repository is public. `releaseDraft` and `prerelease` stay
+false because the URL resolves against the latest **published** release only.
+
+`tauri-action@v1` reads the existing `latest.json` and keeps other platform entries when adding
+a row. The release matrix has `max-parallel: 1` so simultaneous writers cannot lose entries.
+The action writes `linux-x86_64-appimage` and `linux-x86_64-deb` alongside the macOS entries;
+`tauri-plugin-updater` 2.10.1 first looks for the installed bundle's format-specific key, then
+falls back to `linux-x86_64`. The fallback is AppImage, but an installed .deb selects the .deb
+key and invokes its package installer. The local contract check is
+`node scripts/check-linux-update-manifest.mjs <bundle-dir>` after signing.
+
+The `Linux desktop packages` workflow runs on pull requests and can be dispatched from the main
+branch. It uses Ubuntu 22.04 and read-only repository access, creates no release or tag, builds
+both formats unsigned and then with a temporary updater key, verifies signatures and package
+contents, and installs the .deb on its disposable runner to resolve its dependencies. It saves
+packages and the check log as the `linux-x86_64-packages-and-check` CI artifact. The temporary
+private key is neither printed nor uploaded. The check command for an existing local build is
+`bash scripts/check-linux-bundles.sh src-tauri/target/x86_64-unknown-linux-gnu/release/bundle`.
+The AppImage is inspected by extraction, without FUSE; running it on Ubuntu needs FUSE 2
+(`libfuse2` on 22.04, `libfuse2t64` on 24.04).
+
+The first Linux release still needs its owner's Ubuntu 24.04 desktop check after publication:
+launch both formats as a regular user, open a temporary git project and its board, confirm the
+embedded bd and smetanad work without global copies, run `pwd` in a terminal, and confirm the
+project and settings survive restart. When a second Linux version exists, check updates of both
+formats, data preservation and reconnection to the corresponding server; .deb may request system
+authorization. These are manual checks, not claims made by the package workflow.
 
 What the app does with that feed — when it checks, what it downloads by itself, what it refuses to do
 while a run is live — is not release mechanics and is not here. `.claude/rules/updates.md` is where

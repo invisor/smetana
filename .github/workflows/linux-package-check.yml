@@ -1,0 +1,106 @@
+name: Linux desktop packages
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Install build and verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libfuse2 file
+      - name: Install pinned minisign verifier
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz -o "$RUNNER_TEMP/minisign.tar.gz"
+          echo '9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  '"$RUNNER_TEMP/minisign.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/minisign.tar.gz" -C "$RUNNER_TEMP" minisign-linux/x86_64/minisign
+          sudo install -m 0755 "$RUNNER_TEMP/minisign-linux/x86_64/minisign" /usr/local/bin/minisign
+      - run: npm ci
+      - run: npm run fetch-bd
+      - run: npm run build-smetanad -- --release
+      - name: Build unsigned packages
+        run: npm run tauri build -- --target x86_64-unknown-linux-gnu --bundles appimage,deb --no-sign
+      - name: Inspect packages and resolve Debian dependencies on clean Ubuntu
+        run: |
+          set -euo pipefail
+          bundle=src-tauri/target/x86_64-unknown-linux-gnu/release/bundle
+          bash scripts/check-linux-bundles.sh "$bundle" | tee "$RUNNER_TEMP/linux-package-check.log"
+          deb="$(find "$bundle/deb" -maxdepth 1 -name '*.deb' -print -quit)"
+          docker run --rm -v "$PWD:/work:ro" ubuntu:22.04 bash -c \
+            'set -euo pipefail; apt-get update -qq; apt-get install -y "/work/$1"' _ "$deb" \
+            | tee -a "$RUNNER_TEMP/linux-package-check.log"
+      - name: Confirm incomplete packages are rejected
+        run: |
+          set -euo pipefail
+          bundle=src-tauri/target/x86_64-unknown-linux-gnu/release/bundle
+          bad="$RUNNER_TEMP/bad-bundle"
+          mkdir -p "$bad/deb" "$bad/appimage" "$bad/unpacked"
+          cp -f "$bundle"/appimage/*.AppImage "$bad/appimage/"
+          dpkg-deb -R "$(find "$bundle/deb" -maxdepth 1 -name '*.deb' -print -quit)" "$bad/unpacked"
+          rm -f "$bad/unpacked/usr/bin/bd"
+          dpkg-deb -b "$bad/unpacked" "$bad/deb/Smetana_missing-bd_amd64.deb" > /dev/null
+          if bash scripts/check-linux-bundles.sh "$bad" >> "$RUNNER_TEMP/linux-package-check.log" 2>&1; then
+            echo 'The package check accepted a .deb without bd' >&2
+            exit 1
+          fi
+          echo 'PASS missing bd was rejected' | tee -a "$RUNNER_TEMP/linux-package-check.log"
+          mkdir -p "$bad/unpacked-resource"
+          dpkg-deb -R "$(find "$bundle/deb" -maxdepth 1 -name '*.deb' -print -quit)" "$bad/unpacked-resource"
+          skill="$(find "$bad/unpacked-resource/usr/lib" -path '*/resources/smetana/skills/running-tasks/SKILL.md' -print -quit)"
+          test -n "$skill"
+          rm -f "$skill"
+          dpkg-deb -b "$bad/unpacked-resource" "$bad/deb/Smetana_missing-bd_amd64.deb" > /dev/null
+          if bash scripts/check-linux-bundles.sh "$bad" >> "$RUNNER_TEMP/linux-package-check.log" 2>&1; then
+            echo 'The package check accepted a .deb without a skill resource' >&2
+            exit 1
+          fi
+          echo 'PASS missing skill resource was rejected' | tee -a "$RUNNER_TEMP/linux-package-check.log"
+      - name: Build with a temporary updater key and verify both signatures
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/linux-updater.key"
+          password="$(openssl rand -hex 24)"
+          npm run tauri signer generate -- --ci -w "$key" -p "$password" > /dev/null
+          node -e 'const fs = require("fs"); fs.writeFileSync(process.argv[2], JSON.stringify({plugins:{updater:{pubkey:fs.readFileSync(process.argv[1],"utf8").trim()}}}))' "$key.pub" "$RUNNER_TEMP/linux-signing.json"
+          export TAURI_SIGNING_PRIVATE_KEY="$(cat "$key")"
+          export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$password"
+          npm run tauri build -- --target x86_64-unknown-linux-gnu --bundles appimage,deb --config "$RUNNER_TEMP/linux-signing.json"
+          bundle=src-tauri/target/x86_64-unknown-linux-gnu/release/bundle
+          bash scripts/check-linux-bundles.sh "$bundle" | tee -a "$RUNNER_TEMP/linux-package-check.log"
+          base64 -d "$key.pub" > "$RUNNER_TEMP/linux-minisign.pub"
+          for format in deb appimage; do
+            mapfile -t signatures < <(find "$bundle/$format" -maxdepth 1 -name '*.sig' -print)
+            test "${#signatures[@]}" -eq 1
+            signed="${signatures[0]%.sig}"
+            test -f "$signed"
+            base64 -d "${signatures[0]}" > "$RUNNER_TEMP/$format.minisig"
+            minisign -Vm "$signed" -p "$RUNNER_TEMP/linux-minisign.pub" -x "$RUNNER_TEMP/$format.minisig" | tee -a "$RUNNER_TEMP/linux-package-check.log"
+          done
+          node scripts/check-linux-update-manifest.mjs "$bundle" | tee -a "$RUNNER_TEMP/linux-package-check.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-x86_64-packages-and-check
+          path: |
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.sig
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.tar.gz
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.sig
+            ${{ runner.temp }}/linux-package-check.log

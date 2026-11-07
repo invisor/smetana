@@ -120,25 +120,19 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
+      # Each row reads and merges latest.json before uploading it. Serialize
+      # writers so the second row keeps the first row's platform entries.
+      max-parallel: 1
       matrix:
-        # One entry for now: macOS arm64. The row builds for the runner's own
-        # architecture, and that is a constraint rather than a coincidence —
-        # scripts/fetch-bd.mjs fetches the sidecar for the host triple, and
-        # bundle.externalBin looks it up by the build target's. A row that
-        # cross-compiles needs fetch-bd taught about it first. Windows and Linux
-        # are both wanted and neither has been checked by eye yet, so each is a
-        # row added here and nothing else — the steps below already carry the
-        # conditions they need:
-        #   - platform: windows-latest
-        #     rustTargets: ''
-        #     args: ''
-        #   - platform: ubuntu-22.04
-        #     rustTargets: ''
-        #     args: ''
+        # Native builds: fetch-bd and build-smetanad use the runner triple,
+        # which must match the bundle target for both embedded sidecars.
         include:
           - platform: macos-latest
             rustTargets: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
+          - platform: ubuntu-22.04
+            rustTargets: x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu --bundles appimage,deb
 
     runs-on: ${{ matrix.platform }}
 
@@ -160,13 +154,11 @@ jobs:
         with:
           targets: ${{ matrix.rustTargets }}
 
-      # Inert while the matrix holds macOS alone. It is here so that adding an
-      # ubuntu row above is the whole change.
       - name: Install the Linux build dependencies
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libfuse2
 
       - name: Install the front-end dependencies
         run: npm ci
@@ -302,30 +294,23 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Smetana ${{ github.ref_name }}'
-          # The Gatekeeper paragraph that stood here is gone, and so is the
-          # First launch section of README.md it was kept in step with: the
-          # bundle is signed with a Developer ID and notarized, so a downloaded
-          # copy opens on a double-click and there are no steps to give. Neither
-          # half of that pair exists any more, which is why nothing here says a
-          # thing about the first launch.
-          #
-          # The paragraph below is not part of it and is knowingly stale: the
-          # app has had an updater since smetana-oau, and smetana-t3y dropped the
-          # matching sentence from README rather than restate it in a document
-          # that advertises in-place updates a few lines above. Fixing this copy
-          # is smetana-j98's. Do not quietly re-sync the two by putting the claim
-          # back into README. Its second clause used to send a reader back to the
-          # Gatekeeper steps and had to go with them — that is a repair to a
-          # sentence this change broke, not a settling of what is left.
           releaseBody: |
-            Download the .dmg below and drag Smetana to Applications.
+            macOS (Apple silicon): download the .dmg and drag Smetana to Applications.
+            Linux (x86_64): download the .deb for Ubuntu 22.04/24.04, or run the
+            AppImage after making it executable. See README.md for dependencies.
 
-            There is no in-app updater yet, so a new version means downloading
-            the .dmg again.
+            The app checks for signed updates and asks before installing them.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
           args: ${{ matrix.args }}
+
+      - name: Check the Linux release packages
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          bundle=src-tauri/target/x86_64-unknown-linux-gnu/release/bundle
+          bash scripts/check-linux-bundles.sh "$bundle"
+          node scripts/check-linux-update-manifest.mjs "$bundle"
 
       # This runs after the release is published and cannot stop it, and it is
       # here anyway, because the alternative is nobody finding out. tauri-action
