@@ -1159,8 +1159,12 @@ export async function sendMessage(id, message, attachments = []) {
    a plain `deny` whatever tool it is refusing. */
 export async function answerQuestion(id, question, decision, answers = null) {
   try {
-    if (crewAddress(id)) throw new Error('Crew agents do not expose permission answers')
-    await invoke('session_answer', { id, question, decision, answers })
+    const address = crewAddress(id)
+    if (address && address.node !== address.root) throw new Error('Only the Crew lead can answer permissions')
+    // Codex Crew keeps its lead's live permission journal under the numeric
+    // root id. Rust validates that this exact question is still open before
+    // sending the decision to the driver. Claude Crew has no such card.
+    await invoke('session_answer', { id: address?.root ?? id, question, decision, answers })
     conversationState.lastError = null
   } catch (err) {
     report(id, 'answering a question', err)

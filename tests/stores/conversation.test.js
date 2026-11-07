@@ -547,6 +547,20 @@ describe('the conversation store', () => {
     expect(ipc.calls('session_answer')).toEqual([{ id: 1, question: 'q1', decision: 'allow', answers: null }])
   })
 
+  it('routes a Codex Crew lead permission to its live session and rejects child answers', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('session_answer', null)
+
+    await stores.conversation.answerQuestion('crew:41:41', 'q1', 'allow')
+    expect(ipc.calls('session_answer')).toEqual([
+      { id: 41, question: 'q1', decision: 'allow', answers: null }
+    ])
+
+    await stores.conversation.answerQuestion('crew:41:42', 'q1', 'deny')
+    expect(ipc.calls('session_answer')).toHaveLength(1)
+    expect(stores.conversation.conversationState.lastError.session).toBe('crew:41:42')
+  })
+
   /* The whole point of the feature: what `AskUserQuestion.vue` built travels
      to the worker unchanged, keyed by each question's own text. */
   it('carries AskUserQuestion’s own answers over to session_answer', async () => {

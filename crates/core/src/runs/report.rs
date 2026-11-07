@@ -102,6 +102,9 @@ pub struct BatchLine {
     pub outcome: BatchOutcome,
     pub left_behind: Vec<Leftover>,
     pub lock_released: Option<LockRelease>,
+    /// Cancellation could not prove that the batch's writers had stopped, so
+    /// every claim was retained for recovery instead of released mid-write.
+    pub claim_release_deferred: bool,
 }
 
 /// The merge lock this batch's actor was holding when it ended, and which the
@@ -609,6 +612,15 @@ fn stop_reason_line(reason: &StopReason) -> String {
             "The run stopped at a question it had nobody to answer: &ldquo;{}&rdquo;",
             escape(question)
         ),
+        StopReason::PermissionTimedOut { question } => format!(
+            "The run stopped after waiting {} minutes for a permission answer: &ldquo;{}&rdquo;. The agent session remains available to answer it.",
+            super::model::ANSWER_WAIT_MINUTES,
+            escape(question)
+        ),
+        StopReason::PermissionCancelled { question } => format!(
+            "The run stopped and cancelled the agent session while it waited for permission: &ldquo;{}&rdquo;.",
+            escape(question)
+        ),
         StopReason::NothingDone { batches } => format!(
             "The run stopped: {} in a row came back having done nothing at all.",
             if *batches == 1 { "one batch".to_string() } else { format!("{batches} batches") }
@@ -650,7 +662,7 @@ fn outcome_line(outcome: &BatchOutcome) -> (Tone, String) {
         BatchOutcome::Unanswered { question } => (
             Tone::NeedsYou,
             format!(
-                "The run ended this batch at a question it had nobody to answer: &ldquo;{}&rdquo;",
+                "The run ended this batch while its session waited for an answer: &ldquo;{}&rdquo;",
                 escape(question)
             ),
         ),
@@ -693,6 +705,10 @@ fn batch_card(out: &mut String, b: &BatchLine) {
     }
 
     left_and_released(out, &b.left_behind, &b.lock_released);
+    if b.claim_release_deferred {
+        status_line(out, "claim-release", Tone::NeedsYou,
+            "Claim release was deferred because the cancelled batch's process group could not be proven stopped.");
+    }
 
     let (tone, text) = outcome_line(&b.outcome);
     status_line(out, "outcome", tone, &text);
@@ -862,6 +878,7 @@ mod tests {
             outcome: BatchOutcome::Exited,
             left_behind: vec![],
             lock_released: None,
+            claim_release_deferred: false,
         }
     }
 
@@ -907,6 +924,19 @@ mod tests {
         assert!(html.contains("a-1"), "and the board still says which task moved");
     }
 
+    #[test]
+    fn a_closed_task_remains_visible_when_permission_prevented_the_batch_account() {
+        let mut blocked = batch(1);
+        blocked.reported = false;
+        blocked.outcome = BatchOutcome::Unanswered { question: "command: curl example.test".into() };
+        let tasks = Tasks { closed: vec![line("frontend-92e.5")], parked: vec![] };
+        let reason = StopReason::PermissionTimedOut { question: "command: curl example.test".into() };
+        let html = render(&RunReport { stop_reason: &reason, ..report(1800, Some(&tasks), &[blocked]) });
+        assert!(html.contains("frontend-92e.5"));
+        assert!(html.contains("left no account of itself"));
+        assert!(html.contains("waiting 30 minutes for a permission answer"));
+    }
+
     /// The whole `StopReason` vocabulary, one representative value per
     /// variant — `Crashed`, `NeedsAnswer`, `NothingDone` and `Preflight` all
     /// carry a payload, so each gets a value rather than standing for a shape.
@@ -921,6 +951,8 @@ mod tests {
             StopReason::Cancelled,
             StopReason::SessionRemoved,
             StopReason::NeedsAnswer { question: "Trust this folder?".into() },
+            StopReason::PermissionTimedOut { question: "Allow curl?".into() },
+            StopReason::PermissionCancelled { question: "Allow curl?".into() },
             StopReason::NothingDone { batches: 2 },
             StopReason::Preflight { detail: "npm install exited 127".into() },
         ]
@@ -1062,6 +1094,7 @@ mod tests {
             outcome: BatchOutcome::Exited,
             left_behind: vec![],
             lock_released: None,
+            claim_release_deferred: false,
         }
     }
 
@@ -1638,6 +1671,17 @@ mod tests {
             "{html}"
         );
         assert!(!html.contains("Lock released"), "nothing was taken back: {html}");
+    }
+
+    #[test]
+    fn a_cancelled_batch_explains_why_its_claims_were_retained() {
+        let mut killed = batch(1);
+        killed.reported = false;
+        killed.claim_release_deferred = true;
+        killed.left_behind = vec![Leftover { id: "smetana-live".into(), status: "in_progress".into(), lock: false }];
+        let html = render(&report(600, None, &[killed]));
+        assert!(html.contains("Claim release was deferred because the cancelled batch's process group could not be proven stopped."), "{html}");
+        assert!(html.contains("smetana-live"), "{html}");
     }
 
     #[test]

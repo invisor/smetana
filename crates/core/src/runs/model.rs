@@ -133,6 +133,10 @@ pub struct RunSettings {
 /// bound that actually holds.
 pub const INSTRUCTIONS_MAX: usize = 2000;
 
+/// A confirmed permission request may remain open this many minutes before a
+/// controlled run ends with an explicit report. Ordinary work has no deadline.
+pub const ANSWER_WAIT_MINUTES: u64 = 30;
+
 /// Why a run is not running any more.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -184,6 +188,13 @@ pub enum StopReason {
     /// question a profile actually read — see `service::watch_batch` for why a
     /// bell alone is not enough to end a run over.
     NeedsAnswer { question: String },
+    /// A supervised batch held the same permission request open for the
+    /// entire answer allowance. Its session remains available for an answer,
+    /// but the run and its missing batch account are finished explicitly.
+    PermissionTimedOut { question: String },
+    /// Stop was pressed while a permission blocked the batch, so the waiting
+    /// tool call and its session were cancelled without awaiting a batch file.
+    PermissionCancelled { question: String },
     /// This many batches in a row ended having done nothing at all: each left
     /// no account of itself and each found the board exactly where the one
     /// before it did (`queue::did_nothing`).
@@ -211,6 +222,9 @@ pub enum RunState {
     Preflight,
     /// A batch is running; `iteration` counts from zero.
     Working { iteration: u32 },
+    /// A confirmed permission question is open in the batch's session. The
+    /// session stays alive so its normal answer control can reach the tool.
+    WaitingForAnswer { question: String },
     /// Between batches: reading the board and deciding.
     Deciding,
     /// The subscription's allowance is spent, and the run is waiting for it to
@@ -390,7 +404,7 @@ impl RunMode {
     /// there is no one to ask" (`agents::prompt`), and it is the only mode
     /// `Profile::autonomy` hands the bypass switches to. The other two say "ask
     /// me" in as many words, and the person who is sitting there answers in the
-    /// terminal — ending their run out from under them at the first question
+    /// session — ending their run out from under them at the first question
     /// would take away the whole of what they chose the mode for.
     pub fn unattended(self) -> bool {
         match self {
@@ -1198,6 +1212,20 @@ mod tests {
         .expect("serialize");
         assert_eq!(json["kind"], "needs_answer");
         assert_eq!(json["question"], "Do you trust the contents of this directory?");
+    }
+
+    #[test]
+    fn a_supervised_permission_wait_names_the_question_and_the_ending() {
+        let waiting = serde_json::to_value(RunState::WaitingForAnswer {
+            question: "command: curl example.test".into(),
+        }).expect("serialize waiting state");
+        assert_eq!(waiting["kind"], "waiting_for_answer");
+        assert_eq!(waiting["question"], "command: curl example.test");
+        let expired = serde_json::to_value(StopReason::PermissionTimedOut {
+            question: "command: curl example.test".into(),
+        }).expect("serialize ending");
+        assert_eq!(expired["kind"], "permission_timed_out");
+        assert_eq!(expired["question"], waiting["question"]);
     }
 
     #[test]

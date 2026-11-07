@@ -2534,6 +2534,13 @@ const stopTheRun = (token) => {
   stopRun(token)
 }
 
+const openRunAnswer = (run) => {
+  const id = run.session ?? run.last_session
+  if (id == null) return
+  project.sideTab = 'agents'
+  selectAgent(run.transport === 'driven_crew' ? `crew:${id}:${id}` : run.transport === 'driven' ? drivenRowId(id) : id)
+}
+
 /* Which of the paused segments writes the sentence about the subscription
    limit. Computed here rather than in the segment because it is a fact about
    the whole list and no segment can see one — the rule itself is
@@ -8347,6 +8354,7 @@ const toastStackStyle = {
           :run="r"
           :speaks="r.token === limitSpeaker"
           @stop="stopTheRun(r.token)"
+          @answer="openRunAnswer(r)"
           @release="releaseTheRuns()"
         />
       </template>
