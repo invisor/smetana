@@ -1336,7 +1336,7 @@ async fn drive(
         run.advance(RunState::Working { iteration });
         say(&run);
 
-        let outcome = watch_batch(&transport, &mut run, session, &account.reports, batch_no, &say, &account.journal, &mut stop).await;
+        let outcome = watch_batch(&transport, &mut run, session, &account.reports, batch_no, &say, &account.journal, &mut stop, ASK_POLL).await;
         // Read here rather than at the ending, so that a batch's account is
         // taken while it is the freshest thing on disk and every way out of the
         // match below is covered by one read instead of three.
@@ -1371,11 +1371,11 @@ async fn drive(
         let actor = actor_of(&transport, session);
         // Split the pair the moment it arrives: everything below wants the
         // issues, and only the journal line wants where they came from.
-        let (after, after_source) = match fresh_board(&tracker, &root).await {
+        let (mut after, mut after_source) = match fresh_board(&tracker, &root).await {
             Some((issues, source)) => (Some(issues), Some(source)),
             None => (None, None),
         };
-        let leftovers = leftovers_for(after.as_deref(), &actor);
+        let mut leftovers = leftovers_for(after.as_deref(), &actor);
         // Ask about this batch's own process group rather than about the app
         // that started it. A stamped dead leader plus an empty Unix group is
         // the proof needed to give the merge lock and ordinary work back; on
@@ -1389,6 +1389,23 @@ async fn drive(
         // at its dialog when this is asked and `life` comes back `Unproven`.
         let mut life = batch_life(group.as_ref());
         let mut terminal_ack = terminal_handoff_ready(&transport, session).await;
+        if let Batch::AnswerCancelled { terminal_ack: killed_job, .. } = &outcome {
+            terminal_ack |= *killed_job;
+            if handoff_gate() == HandoffGate::ProcessGroup && life == queue::BatchLife::Unproven {
+                let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                    while batch_life(group.as_ref()) != queue::BatchLife::ProvenDead {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }).await;
+                life = batch_life(group.as_ref());
+            }
+            // A child can write one last claim while the group drains.
+            if let Some((issues, source)) = fresh_board(&tracker, &root).await {
+                leftovers = leftovers_for(Some(&issues), &actor);
+                after = Some(issues);
+                after_source = Some(source);
+            }
+        }
         // Taken once, here, rather than inside the emptiness rule below: the
         // line on the record and the value the decision is made from have to be
         // the same snapshot, or the journal describes a board the loop did not
@@ -1644,7 +1661,10 @@ async fn drive(
             // the session here is left sitting at its prompt with somebody
             // about to answer it.
             Batch::AnswerTimedOut { .. } => None,
-            Batch::AnswerCancelled { .. } => None,
+            Batch::AnswerCancelled { .. } => {
+                release_claims(&tracker, &root, &repos, batch_no, &actor, &leftovers,
+                    handoff_life(handoff_gate(), life, terminal_ack)).await
+            }
             Batch::Unanswered { .. } => {
                 let reviewed: Vec<queue::Leftover> =
                     leftovers.iter().filter(|left| queue::is_reviewed(left)).cloned().collect();
@@ -1741,7 +1761,7 @@ async fn drive(
                 finish(&mut run, StopReason::PermissionTimedOut { question }, &say, &account, &root, &tracker).await;
                 return;
             }
-            Batch::AnswerCancelled { question } => {
+            Batch::AnswerCancelled { question, .. } => {
                 finish(&mut run, StopReason::PermissionCancelled { question }, &say, &account, &root, &tracker).await;
                 return;
             }
@@ -2223,7 +2243,7 @@ fn outcome_of(batch: &Batch) -> BatchOutcome {
         Batch::HandedBack => BatchOutcome::HandedBack,
         Batch::Unanswered { question } => BatchOutcome::Unanswered { question: question.clone() },
         Batch::AnswerTimedOut { question } => BatchOutcome::Unanswered { question: question.clone() },
-        Batch::AnswerCancelled { question } => BatchOutcome::Unanswered { question: question.clone() },
+        Batch::AnswerCancelled { question, .. } => BatchOutcome::Unanswered { question: question.clone() },
     }
 }
 
@@ -2914,29 +2934,47 @@ async fn park_claims(
 /// does. Awaited rather than fired off, so the parking that follows starts
 /// after the kill has gone in rather than beside it — what that kill does and
 /// does not reach is recorded at the call site.
-async fn remove_session(transport: &RunTransport, session: u64) {
+async fn remove_session(transport: &RunTransport, session: u64) -> bool {
     let RunTransport::Pty(terminal) = transport else {
-        if let RunTransport::Driven { session: driven, run } = transport {
+        if let RunTransport::Driven {
+            session: driven,
+            run,
+        } = transport
+        {
             if run.transport == Transport::Driven {
                 // The cross on the row: `Close` ends the child and the loop
                 // reads the reaping as `Removed`.
                 let (tx, rx) = oneshot::channel();
-                if driven.0.send(crate::session::service::Request::Close(session, tx)).await.is_ok() {
+                if driven
+                    .0
+                    .send(crate::session::service::Request::Close(session, tx))
+                    .await
+                    .is_ok()
+                {
                     let _ = rx.await;
                 }
             } else {
                 // A driven root owns its provider child processes and watcher
                 // subscriptions. `CrewClear` kills the interactive PTY (where
                 // present) and removes the package tree atomically.
-                let _ = driven.0.send(crate::session::service::Request::CrewClear(session)).await;
+                let _ = driven
+                    .0
+                    .send(crate::session::service::Request::CrewClear(session))
+                    .await;
             }
         }
-        return;
+        return false;
     };
     let (tx, rx) = oneshot::channel();
-    if terminal.0.send(TerminalRequest::Remove(session, tx)).await.is_ok() {
-        let _ = rx.await;
+    if terminal
+        .0
+        .send(TerminalRequest::Remove(session, tx))
+        .await
+        .is_ok()
+    {
+        return rx.await.unwrap_or(false);
     }
+    false
 }
 
 /// May another batch go out? The worker answers, and the answer is the decision
@@ -3078,9 +3116,18 @@ fn actor_of(transport: &RunTransport, session: u64) -> String {
 /// at any moment and the registry does not know about this agent yet — so the
 /// ceiling is `recovery::EXEC`, a second, against an ordinary cost of one poll.
 async fn group_of(transport: &RunTransport, session: u64) -> Option<Proc> {
-    let RunTransport::Pty(terminal) = transport else { return None };
     let (tx, rx) = oneshot::channel();
-    terminal.0.send(TerminalRequest::Group(session, tx)).await.ok()?;
+    match transport {
+        RunTransport::Pty(terminal) => {
+            terminal.0.send(TerminalRequest::Group(session, tx)).await.ok()?;
+        }
+        RunTransport::Driven { session: driven, run } => {
+            // Claude Crew owns a PTY outside `sessions` and does not provide
+            // this identity. The Codex Crew root and ordinary driven lead do.
+            if run.transport == Transport::DrivenCrew && run.profile != "codex" { return None; }
+            driven.0.send(crate::session::service::Request::SessionGroup(session, tx)).await.ok()?;
+        }
+    }
     recovery::group(rx.await.ok()??).await
 }
 
@@ -3104,7 +3151,7 @@ pub(super) enum Batch {
     /// the permission wait limit. The session is retained for that answer.
     AnswerTimedOut { question: String },
     /// Stop while a permission is open cancels the waiting call immediately.
-    AnswerCancelled { question: String },
+    AnswerCancelled { question: String, terminal_ack: bool },
 }
 
 /// Wait for the batch to end. A confirmed question either parks an unattended
@@ -3143,6 +3190,7 @@ async fn watch_batch(
     say: &impl Fn(&Run),
     journal: &Journal,
     stop: &mut mpsc::Receiver<()>,
+    poll: Duration,
 ) -> Batch {
     let mut ended = std::pin::pin!(await_exit(transport, session));
     // A supervised or solo run has somebody who can answer in its session, and
@@ -3162,19 +3210,30 @@ async fn watch_batch(
     // exit — because the person typed `/exit`, or the harness ended on its own —
     // ends the batch exactly as it always did.
     if !run.settings.mode.unattended() {
-        let iteration = match run.state { RunState::Working { iteration } => iteration, _ => 0 };
+        let iteration = match run.state {
+            RunState::Working { iteration } => iteration,
+            _ => 0,
+        };
         let mut asked = Asked::default();
-        let mut waiting: Option<(String, Instant)> = None;
+        let mut waiting: Option<(PendingPermission, Instant)> = None;
         loop {
             tokio::select! {
                 exit = &mut ended => return Batch::Ended(exit),
                 _ = stop.recv(), if waiting.is_some() => {
-                    let question = waiting.take().expect("stop is polled only while waiting").0;
-                    journal.say(&format!("batch {batch} permission wait cancelled question={question:?} account=no"));
-                    remove_session(transport, session).await;
-                    return Batch::AnswerCancelled { question };
+                    let pending = waiting.take().expect("stop is polled only while waiting").0;
+                    if asking(transport, run, session).await.as_ref().is_some_and(|open| open.id == pending.id) {
+                        journal.say(&format!("batch {batch} permission wait cancelled id={:?} question={:?} account=no", pending.id, pending.question));
+                        let terminal_ack = remove_session(transport, session).await;
+                        return Batch::AnswerCancelled { question: pending.question, terminal_ack };
+                    }
+                    // The answer won the race with Stop. Keep the batch alive
+                    // and let the existing cooperative stop finish its work.
+                    journal.say(&format!("batch {batch} permission answered before Stop; waiting for batch handoff"));
+                    run.request_stop(false);
+                    run.advance(RunState::Working { iteration });
+                    say(run);
                 }
-                _ = tokio::time::sleep(ASK_POLL) => {
+                _ = tokio::time::sleep(poll) => {
                     if handed_back(reports, batch) {
                         // Tell a Crew package its batch is over, so a child
                         // that never started reading as anything but
@@ -3194,18 +3253,19 @@ async fn watch_batch(
                         return Batch::HandedBack;
                     }
                     let seen = asking(transport, run, session).await;
-                    if let Some(question) = asked.confirm(seen.as_deref()) {
+                    if let Some(id) = asked.confirm(seen.as_ref().map(|open| open.id.as_str())) {
+                        let pending = seen.expect("confirmed permission is still open");
                         match &waiting {
-                            Some((previous, since)) if previous == &question => {
+                            Some((previous, since)) if previous.id == id => {
                                 if permission_wait_expired(*since, Instant::now()) {
-                                    journal.say(&format!("batch {batch} permission wait expired question={question:?} account=no"));
-                                    return Batch::AnswerTimedOut { question };
+                                    journal.say(&format!("batch {batch} permission wait expired id={:?} question={:?} account=no", pending.id, pending.question));
+                                    return Batch::AnswerTimedOut { question: pending.question };
                                 }
                             }
                             _ => {
-                                journal.say(&format!("batch {batch} waiting for permission question={question:?}"));
-                                waiting = Some((question.clone(), Instant::now()));
-                                run.advance(RunState::WaitingForAnswer { question });
+                                journal.say(&format!("batch {batch} waiting for permission id={:?} question={:?}", pending.id, pending.question));
+                                waiting = Some((pending.clone(), Instant::now()));
+                                run.advance(RunState::WaitingForAnswer { question: pending.question });
                                 say(run);
                             }
                         }
@@ -3222,8 +3282,8 @@ async fn watch_batch(
     loop {
         tokio::select! {
             exit = &mut ended => return Batch::Ended(exit),
-            _ = tokio::time::sleep(ASK_POLL) => {
-                let seen = asking(transport, run, session).await;
+            _ = tokio::time::sleep(poll) => {
+                let seen = asking_unattended(transport, run, session).await;
                 if let Some(question) = asked.confirm(seen.as_deref()) {
                     return Batch::Unanswered { question };
                 }
@@ -3238,19 +3298,55 @@ async fn watch_batch(
 /// `None` for a session that is working, that has gone from the worker's map,
 /// or that is loud with nothing readable behind it — the last of those is the
 /// bell case, and it is deliberately not evidence of anything here.
-async fn asking(transport: &RunTransport, run: &Run, session: u64) -> Option<String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingPermission {
+    id: String,
+    question: String,
+}
+
+async fn asking(transport: &RunTransport, _run: &Run, session: u64) -> Option<PendingPermission> {
     match transport {
         RunTransport::Pty(terminal) => {
             let (tx, rx) = oneshot::channel();
-            terminal.0.send(TerminalRequest::List(run.project.clone(), tx)).await.ok()?;
-            rx.await.ok()?.into_iter().find(|s| s.id == session)
-                .filter(|s| s.state == SessionState::NeedsYou)
-                .and_then(|s| s.question).map(|question| question.text)
+            terminal
+                .0
+                .send(TerminalRequest::Permission(session, tx))
+                .await
+                .ok()?;
+            rx.await
+                .ok()?
+                .map(|(generation, question)| PendingPermission {
+                    id: format!("pty:{session}:{generation}"),
+                    question,
+                })
         }
-        RunTransport::Driven { session: driven, .. } => {
-            let (tx, rx) = oneshot::channel();
-            driven.0.send(crate::session::service::Request::Attach(session, tx)).await.ok()?;
-            pending_permission(&rx.await.ok()?.ok()?.events)
+        RunTransport::Driven {
+            session: driven,
+            run: driven_run,
+        } => {
+            if driven_run.transport == Transport::DrivenCrew && driven_run.profile != "codex" {
+                return None;
+            }
+            let events = if driven_run.transport == Transport::DrivenCrew {
+                let (tx, rx) = oneshot::channel();
+                driven
+                    .0
+                    .send(crate::session::service::Request::CrewAttach(
+                        session, session, tx,
+                    ))
+                    .await
+                    .ok()?;
+                rx.await.ok()?.ok()?.events
+            } else {
+                let (tx, rx) = oneshot::channel();
+                driven
+                    .0
+                    .send(crate::session::service::Request::Attach(session, tx))
+                    .await
+                    .ok()?;
+                rx.await.ok()?.ok()?.events
+            };
+            pending_permission(&events)
         }
     }
 }
@@ -3262,18 +3358,59 @@ fn permission_wait_expired(since: Instant, now: Instant) -> bool {
 /// The driven journal is the source of truth for open permission cards: an
 /// answer, denial or cancellation appends `PermissionAnswered` under the same
 /// id, and the session worker relays the decision to the waiting tool call.
-fn pending_permission(events: &[crate::session::model::Event]) -> Option<String> {
+fn pending_permission(events: &[crate::session::model::Event]) -> Option<PendingPermission> {
+    pending_question(events, false)
+}
+
+fn pending_question(events: &[crate::session::model::Event], include_user: bool) -> Option<PendingPermission> {
     let mut open = std::collections::BTreeMap::new();
     for event in events {
         match &event.kind {
-            crate::session::model::EventKind::Permission { id, tool, detail, .. } => {
-                open.insert(id.clone(), format!("{tool}: {detail}"));
+            crate::session::model::EventKind::Permission {
+                id, tool, detail, ..
+            } => {
+                if include_user || tool != "AskUserQuestion" {
+                    open.insert(
+                        id.clone(),
+                        PendingPermission {
+                            id: id.clone(),
+                            question: format!("{tool}: {detail}"),
+                        },
+                    );
+                }
             }
-            crate::session::model::EventKind::PermissionAnswered { id, .. } => { open.remove(id); }
+            crate::session::model::EventKind::PermissionAnswered { id, .. } => {
+                open.remove(id);
+            }
             _ => {}
         }
     }
     open.into_values().next()
+}
+
+async fn asking_unattended(transport: &RunTransport, run: &Run, session: u64) -> Option<String> {
+    match transport {
+        RunTransport::Pty(terminal) => {
+            let (tx, rx) = oneshot::channel();
+            terminal.0.send(TerminalRequest::List(run.project.clone(), tx)).await.ok()?;
+            rx.await.ok()?.into_iter().find(|s| s.id == session)
+                .filter(|s| s.state == SessionState::NeedsYou)
+                .and_then(|s| s.question).map(|question| question.text)
+        }
+        RunTransport::Driven { session: driven, run: driven_run } => {
+            let events = if driven_run.transport == Transport::DrivenCrew {
+                if driven_run.profile != "codex" { return None; }
+                let (tx, rx) = oneshot::channel();
+                driven.0.send(crate::session::service::Request::CrewAttach(session, session, tx)).await.ok()?;
+                rx.await.ok()?.ok()?.events
+            } else {
+                let (tx, rx) = oneshot::channel();
+                driven.0.send(crate::session::service::Request::Attach(session, tx)).await.ok()?;
+                rx.await.ok()?.ok()?.events
+            };
+            pending_question(&events, true).map(|pending| pending.question)
+        }
+    }
 }
 
 /// A terminal worker that is not there to answer counts as a batch that ended
@@ -4035,16 +4172,57 @@ mod tests {
     #[test]
     fn a_driven_permission_remains_open_only_until_its_own_answer() {
         use crate::session::model::{Decision, Event, EventKind};
-        let event = |seq, kind| Event { seq, at: String::new(), kind };
-        let question = event(1, EventKind::Permission {
-            id: "p1".into(), tool: "command".into(), detail: "curl example.test".into(),
-            options: vec![Decision::Allow, Decision::Deny], input: serde_json::Value::Null,
-        });
-        assert_eq!(pending_permission(&[question.clone()]).as_deref(), Some("command: curl example.test"));
+        let event = |seq, kind| Event {
+            seq,
+            at: String::new(),
+            kind,
+        };
+        let question = event(
+            1,
+            EventKind::Permission {
+                id: "p1".into(),
+                tool: "command".into(),
+                detail: "curl example.test".into(),
+                options: vec![Decision::Allow, Decision::Deny],
+                input: serde_json::Value::Null,
+            },
+        );
+        assert_eq!(
+            pending_permission(&[question.clone()]),
+            Some(PendingPermission {
+                id: "p1".into(),
+                question: "command: curl example.test".into(),
+            })
+        );
         for decision in [Decision::Allow, Decision::Deny] {
-            let answered = event(2, EventKind::PermissionAnswered { id: "p1".into(), decision, answers: None });
+            let answered = event(
+                2,
+                EventKind::PermissionAnswered {
+                    id: "p1".into(),
+                    decision,
+                    answers: None,
+                },
+            );
             assert_eq!(pending_permission(&[question.clone(), answered]), None);
         }
+        let ask_user = event(
+            3,
+            EventKind::Permission {
+                id: "q2".into(),
+                tool: "AskUserQuestion".into(),
+                detail: "Which approach?".into(),
+                options: vec![Decision::Allow, Decision::Deny],
+                input: serde_json::Value::Null,
+            },
+        );
+        assert_eq!(
+            pending_permission(&[ask_user.clone()]),
+            None,
+            "a general user question has no permission deadline"
+        );
+        assert_eq!(pending_question(&[ask_user], true).map(|pending| pending.question),
+            Some("AskUserQuestion: Which approach?".into()),
+            "Auto still parks a question it cannot answer");
     }
 
     #[test]
@@ -4265,5 +4443,205 @@ mod tests {
             wait_paused(&mut stop, &mut released, &mut settings_changed, None, gated_on).await,
             "\"Run anyway\" must still send the loop straight round for another turn"
         );
+    }
+    struct WatchedPty {
+        prompt: std::sync::Arc<std::sync::Mutex<Option<(u64, String)>>>,
+        stop: mpsc::Sender<()>,
+        exit: oneshot::Sender<Exit>,
+        states: mpsc::UnboundedReceiver<RunState>,
+        removed: mpsc::UnboundedReceiver<()>,
+        result: tokio::task::JoinHandle<(Batch, Run)>,
+        _dir: tempfile::TempDir,
+    }
+
+    fn watched_pty(initial: Option<(u64, &str)>, with_account: bool) -> WatchedPty {
+        let dir = tempfile::tempdir().unwrap();
+        if with_account {
+            std::fs::write(
+                dir.path().join("batch-1.json"),
+                "{\"tasks\":[{\"id\":\"a-1\",\"did\":\"closed it\"}]}",
+            )
+            .unwrap();
+        }
+        let prompt = std::sync::Arc::new(std::sync::Mutex::new(
+            initial.map(|(id, text)| (id, text.into())),
+        ));
+        let (terminal_tx, mut terminal_rx) = mpsc::channel(16);
+        let (removed_tx, removed) = mpsc::unbounded_channel();
+        let (exit_tx, exit_rx) = oneshot::channel();
+        let prompt_for_worker = prompt.clone();
+        tokio::spawn(async move {
+            let mut exit_rx = Some(exit_rx);
+            while let Some(request) = terminal_rx.recv().await {
+                match request {
+                    TerminalRequest::Permission(7, tx) => {
+                        let _ = tx.send(prompt_for_worker.lock().unwrap().clone());
+                    }
+                    TerminalRequest::AwaitExit(7, tx) => {
+                        let exit = exit_rx.take().unwrap();
+                        tokio::spawn(async move {
+                            let _ = tx.send(exit.await.unwrap_or(Exit::NoCode));
+                        });
+                    }
+                    TerminalRequest::Remove(7, tx) => {
+                        let _ = removed_tx.send(());
+                        let _ = tx.send(true);
+                    }
+                    _ => panic!("unexpected terminal request"),
+                }
+            }
+        });
+        let mut options = settings(RunScope::Queue);
+        options.mode = RunMode::Supervised;
+        let mut run = Run::new(1, dir.path().to_string_lossy().into_owned(), options);
+        run.working_in(7);
+        run.advance(RunState::Working { iteration: 0 });
+        let journal = Journal::open(dir.path(), 1, chrono::Local::now());
+        let reports = dir.path().to_path_buf();
+        let (state_tx, states) = mpsc::unbounded_channel();
+        let (stop, mut stop_rx) = mpsc::channel(1);
+        let result = tokio::spawn(async move {
+            let say = |run: &Run| {
+                let _ = state_tx.send(run.state.clone());
+            };
+            let batch = watch_batch(
+                &RunTransport::Pty(TerminalHandle(terminal_tx)),
+                &mut run,
+                7,
+                &reports,
+                1,
+                &say,
+                &journal,
+                &mut stop_rx,
+                Duration::from_millis(5),
+            )
+            .await;
+            (batch, run)
+        });
+        WatchedPty {
+            prompt,
+            stop,
+            exit: exit_tx,
+            states,
+            removed,
+            result,
+            _dir: dir,
+        }
+    }
+
+    async fn next_state(states: &mut mpsc::UnboundedReceiver<RunState>) -> RunState {
+        tokio::time::timeout(Duration::from_secs(1), states.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn watch_batch_waits_for_permission_then_resumes_after_answer() {
+        let mut case = watched_pty(Some((1, "command approval")), false);
+        assert!(matches!(
+            next_state(&mut case.states).await,
+            RunState::WaitingForAnswer { .. }
+        ));
+        *case.prompt.lock().unwrap() = None;
+        assert!(matches!(
+            next_state(&mut case.states).await,
+            RunState::Working { .. }
+        ));
+        case.exit.send(Exit::Code(0)).unwrap();
+        let (batch, _) = case.result.await.unwrap();
+        assert!(matches!(batch, Batch::Ended(Exit::Code(0))));
+        assert!(case.removed.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn watch_batch_stop_rechecks_the_same_permission_before_killing() {
+        let mut case = watched_pty(Some((1, "command approval")), false);
+        assert!(matches!(
+            next_state(&mut case.states).await,
+            RunState::WaitingForAnswer { .. }
+        ));
+        case.stop.send(()).await.unwrap();
+        let (batch, _) = case.result.await.unwrap();
+        assert!(matches!(
+            batch,
+            Batch::AnswerCancelled {
+                terminal_ack: true,
+                ..
+            }
+        ));
+        case.removed
+            .recv()
+            .await
+            .expect("the open permission was cancelled");
+
+        let mut answered = watched_pty(Some((1, "command approval")), false);
+        assert!(matches!(
+            next_state(&mut answered.states).await,
+            RunState::WaitingForAnswer { .. }
+        ));
+        *answered.prompt.lock().unwrap() = None;
+        answered.stop.send(()).await.unwrap();
+        assert!(matches!(
+            next_state(&mut answered.states).await,
+            RunState::Working { .. }
+        ));
+        answered.exit.send(Exit::Code(0)).unwrap();
+        let (batch, run) = answered.result.await.unwrap();
+        assert!(matches!(batch, Batch::Ended(Exit::Code(0))));
+        assert!(
+            run.stopping,
+            "the answer converts Stop to the cooperative path"
+        );
+        assert!(answered.removed.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn watch_batch_leaves_ordinary_work_and_an_account_alone() {
+        let mut working = watched_pty(None, false);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), working.states.recv())
+                .await
+                .is_err()
+        );
+        working.exit.send(Exit::Code(0)).unwrap();
+        assert!(matches!(
+            working.result.await.unwrap().0,
+            Batch::Ended(Exit::Code(0))
+        ));
+
+        let account = watched_pty(None, true);
+        assert!(matches!(account.result.await.unwrap().0, Batch::HandedBack));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn driven_run_group_proof_reaches_lock_release_gate() {
+        use std::os::unix::process::CommandExt;
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("30");
+        command.as_std_mut().process_group(0);
+        let mut child = command.spawn().unwrap();
+        let pid = child.id().unwrap();
+        let (tx, mut rx) = mpsc::channel(1);
+        let worker = tokio::spawn(async move {
+            if let Some(crate::session::service::Request::SessionGroup(7, reply)) = rx.recv().await {
+                let _ = reply.send(Some(pid));
+            }
+        });
+        let transport = RunTransport::Driven {
+            session: SessionHandle(tx),
+            run: RunSession { profile: "codex".into(), provider: "Codex".into(), transport: Transport::DrivenCrew },
+        };
+        let group = group_of(&transport, 7).await.expect("the lead's stamped group");
+        assert_eq!(batch_life(Some(&group)), queue::BatchLife::Unproven);
+        child.start_kill().unwrap();
+        child.wait().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while batch_life(Some(&group)) != queue::BatchLife::ProvenDead {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("a reaped group becomes safe to release");
+        worker.await.unwrap();
     }
 }

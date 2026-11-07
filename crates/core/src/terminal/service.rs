@@ -163,7 +163,8 @@ pub enum Request {
     /// tree's menu means. It is checked with `resolve_within` like every other
     /// path this app takes from the front end; see `shell_cwd`.
     CreateShell(String, Option<String>, oneshot::Sender<Result<Session, TerminalError>>),
-    Remove(SessionId, oneshot::Sender<()>),
+    Remove(SessionId, oneshot::Sender<bool>),
+    Permission(SessionId, oneshot::Sender<Option<(u64, String)>>),
     Attach(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
     /// The same answer as `Attach`, from a reader that is not the window: it
     /// takes no seat. `active` and the pending output are left alone, because
@@ -226,6 +227,9 @@ pub struct TerminalHandle(pub mpsc::Sender<Request>);
 
 struct Live {
     session: Session,
+    permission_generation: u64,
+    permission_question: Option<(String, Vec<String>)>,
+    permission_suppressed: bool,
     /// Which agent this session runs — layer B's own dialog reader comes
     /// from here, not from a name hardcoded in `detect.rs`. `None` for a
     /// session that runs no agent, which is the person's own shell: it has no
@@ -887,6 +891,8 @@ fn absorb(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk) 
             // separately, here, where the wait lives.
             let code = live.pty.exit_code();
             live.session.finish(code);
+            live.permission_question = None;
+            live.permission_suppressed = false;
             // The process is gone: there is nobody left to call for.
             live.bell_pending = false;
             // Windows point 1: this session's own Job Object, gone at once —
@@ -1079,6 +1085,13 @@ fn flush(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, active: Option<
 /// it on. `Starting` is therefore brief, which is right — it means "created,
 /// nothing seen yet", and a session that failed to spawn never gets here to
 /// be called running.
+fn codex_permission(question: &crate::terminal::model::Question) -> bool {
+    matches!(question.text.as_str(),
+        "Would you like to run the following command?" |
+        "Would you like to make the following edits?" |
+        "Do you trust the contents of this directory?")
+}
+
 fn reassess(ctx: &Context, sessions: &mut HashMap<SessionId, Live>) {
     for live in sessions.values_mut() {
         if live.session.state == SessionState::Exited {
@@ -1122,6 +1135,14 @@ fn reassess(ctx: &Context, sessions: &mut HashMap<SessionId, Live>) {
         });
         let before = (live.session.state, live.session.question.clone());
         live.session.apply(out.state, out.question);
+        let permission = live.session.question.as_ref()
+            .filter(|question| live.profile.is_some_and(|profile| profile.id() == "codex") && codex_permission(question))
+            .map(|question| (question.text.clone(), question.options.iter().map(|option| option.label.clone()).collect::<Vec<_>>()));
+        if permission != live.permission_question {
+            live.permission_generation = live.permission_generation.wrapping_add(1);
+            live.permission_question = permission;
+            live.permission_suppressed = false;
+        }
         // The same predicate a conversation session uses, on the change of state and not on the tick:
         // a session that stays in `NeedsYou` for a minute of ticks reaches the phone once.
         announce_wait(before.0, live.session.state, || {
@@ -1371,6 +1392,14 @@ fn handle(
             list.sort_by_key(|s| s.id);
             let _ = tx.send(list);
         }
+        Request::Permission(id, tx) => {
+            let open = sessions.get(&id).and_then(|live| {
+                (!live.permission_suppressed).then_some(())?;
+                let (question, _) = live.permission_question.as_ref()?;
+                Some((live.permission_generation, question.clone()))
+            });
+            let _ = tx.send(open);
+        }
         Request::Marks(tx) => {
             let mut list: Vec<SessionMark> = sessions
                 .values()
@@ -1594,6 +1623,9 @@ fn handle(
                     session.timeline = log_entries.is_some();
                     let live = Live {
                         session: session.clone(),
+                        permission_generation: 0,
+                        permission_question: None,
+                        permission_suppressed: false,
                         profile: Some(profile),
                         pty,
                         ring: Ring::new(RING_CAP),
@@ -1766,6 +1798,9 @@ fn handle(
                     );
                     let live = Live {
                         session: session.clone(),
+                        permission_generation: 0,
+                        permission_question: None,
+                        permission_suppressed: false,
                         // No agent, so no layer B — see `DetectInput::profile`.
                         profile: None,
                         pty,
@@ -1800,11 +1835,12 @@ fn handle(
             });
         }
         Request::Remove(id, tx) => {
+            let mut terminated_job = false;
             if let Some(mut live) = sessions.remove(&id) {
                 live.pty.kill();
                 // Windows point 2: this session's own Job Object, gone at
                 // once — a no-op everywhere else.
-                live.pty.terminate_job();
+                terminated_job = live.pty.terminate_job();
                 // A person took the row away, so the offer goes with it. The
                 // front end has its own verb for a row with *no* session behind
                 // it — `terminal_forget` — and this is the same act one session
@@ -1833,7 +1869,7 @@ fn handle(
             if *active == Some(id) {
                 *active = None;
             }
-            let _ = tx.send(());
+            let _ = tx.send(terminated_job);
         }
         Request::Attach(id, tx) => {
             let _ = tx.send(attach(ctx, sessions, active, id));
@@ -1881,6 +1917,7 @@ fn handle(
                     live.pty.write(data.as_bytes());
                     // The human has answered — there is nobody left to call.
                     live.bell_pending = false;
+                    live.permission_suppressed = true;
                     Ok(())
                 }
             });
@@ -2014,6 +2051,28 @@ fn handle(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn only_known_codex_approval_dialogs_are_permission_waits() {
+        let make = |text: &str| crate::terminal::model::Question {
+            text: text.into(),
+            options: Vec::new(),
+            selected: None,
+        };
+        assert!(super::codex_permission(&make(
+            "Would you like to run the following command?"
+        )));
+        assert!(super::codex_permission(&make(
+            "Would you like to make the following edits?"
+        )));
+        assert!(super::codex_permission(&make(
+            "Do you trust the contents of this directory?"
+        )));
+        assert!(!super::codex_permission(&make(
+            "Which approach should I take?"
+        )));
+        assert!(!super::codex_permission(&make("Update available!")));
+    }
+
+    #[test]
     fn the_log_keeps_the_newest_budget_and_records_what_it_dropped() {
         let mut log = VecDeque::new();
         let mut trimmed = 0;
@@ -2128,6 +2187,9 @@ mod tests {
                 crate::terminal::model::SessionWork::Shell,
                 None,
             ),
+            permission_generation: 0,
+            permission_question: None,
+            permission_suppressed: false,
             profile: None,
             pty,
             ring,

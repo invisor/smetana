@@ -330,6 +330,8 @@ pub enum Request {
     /// Wait for a driven session's child to end: the run loop's completion
     /// channel, the twin of the terminal worker's `AwaitExit`.
     AwaitExit(SessionId, oneshot::Sender<crate::terminal::model::Exit>),
+    /// The run worker records this lead's child identity before work begins.
+    SessionGroup(SessionId, oneshot::Sender<Option<u32>>),
     Attach(SessionId, oneshot::Sender<Result<Attached, SessionError>>),
     /// Everything after `seq`, or `None` when the journal no longer holds it —
     /// which is the front end's cue to take a fresh snapshot rather than draw a
@@ -745,6 +747,16 @@ fn spawnable(builder: &CommandBuilder) -> Option<tokio::process::Command> {
     Some(cmd)
 }
 
+fn isolate_run_group(command: &mut tokio::process::Command, run: bool) {
+    #[cfg(unix)]
+    if run {
+        use std::os::unix::process::CommandExt;
+        command.as_std_mut().process_group(0);
+    }
+    #[cfg(not(unix))]
+    let _ = (command, run);
+}
+
 /// The codec for a harness, or `None` for one this app cannot drive.
 ///
 /// Only the explicitly supported interactive harnesses have one. A profile without a codec is refused rather than
@@ -1022,6 +1034,9 @@ fn spawn_session(
     let Some(mut command) = spawnable(&builder) else {
         return Err(SessionError::Spawn("the driver produced no command line".into()));
     };
+    // A controlled driven Run needs the same process-group identity that a
+    // PTY Run records. A person's own conversation keeps its usual lifetime.
+    isolate_run_group(&mut command, matches!(launch.intent, Intent::Run { .. }));
 
     let mut child = command.spawn().map_err(|error| {
         SessionError::Spawn(format!("{} could not be started: {error}", profile.binary()))
@@ -2421,6 +2436,9 @@ fn handle(
             let pending = sessions.get(&id).is_some_and(|live| !live.reaped);
             await_exit(exit_waiters, exits, id, tx, pending);
         }
+        Request::SessionGroup(id, tx) => {
+            let _ = tx.send(sessions.get(&id).and_then(|live| live.child.as_ref()).and_then(|child| child.id()));
+        }
         Request::Start(project, intent, tx) => {
             if !drivable(&intent) {
                 // The same capability tag `driver_for`'s own `None` answers
@@ -2590,12 +2608,22 @@ fn handle(
             // Secrets still go to the harness, but a long-lived journal must
             // never retain their plaintext. Non-secret answers stay readable.
             let journal_answers = redact_secret_answers(live.journal.events(), &question, answers.clone());
+            let answered = EventKind::PermissionAnswered { id: question.clone(), decision, answers: journal_answers };
             append(
                 ctx,
                 id,
                 live,
-                vec![EventKind::PermissionAnswered { id: question.clone(), decision, answers: journal_answers }],
+                vec![answered.clone()],
             );
+            // The Codex Crew lead has a live journal and a mirrored root
+            // journal. `CrewAttach` reads the latter, so settle its card too.
+            if let Some(root) = crew_leads.get(&id).copied() {
+                if let Some(package) = crews.get_mut(&root) {
+                    if let Some(events) = package.append(package.root, vec![answered]) {
+                        emit_crew_events(ctx, root, package.root, events);
+                    }
+                }
+            }
             // Some harnesses take a decision over stdin instead of a channel of
             // their own; Claude Code answers `None` here and is served by the
             // listener below. Nothing here passes `answers` down that road: it
@@ -3223,6 +3251,19 @@ fn note_conversation(ctx: &Context, id: SessionId, live: &mut Live, conversation
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_driven_run_has_its_own_provable_process_group() {
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("30");
+        isolate_run_group(&mut command, true);
+        let mut child = command.spawn().unwrap();
+        let pid = child.id().unwrap() as i32;
+        assert_eq!(unsafe { libc::getpgid(pid) }, pid);
+        child.start_kill().unwrap();
+        child.wait().await.unwrap();
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn idle_codex_stop_keeps_child_alive_and_accepts_the_next_write() {
