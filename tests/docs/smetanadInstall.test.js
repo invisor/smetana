@@ -75,10 +75,14 @@ describe('the release job', () => {
   })
 
   it('starts server archives only after the final job verifies and publishes the draft', () => {
+    const releaseStart = workflow.indexOf('\n  release:')
     const publishStart = workflow.indexOf('\n  publish:')
     const serverStart = workflow.indexOf('\n  smetanad:')
-    expect(publishStart).toBeGreaterThan(-1)
+    expect(releaseStart).toBeGreaterThan(-1)
+    expect(publishStart).toBeGreaterThan(releaseStart)
     expect(serverStart).toBeGreaterThan(publishStart)
+    const release = workflow.slice(releaseStart, publishStart)
+    expect(release).toMatch(/^\s+releaseDraft: true$/m)
     const publish = workflow.slice(publishStart, serverStart)
     expect(publish).toMatch(/needs: release\b/)
     const manifestCheck = publish.indexOf('check-linux-update-manifest.mjs')
