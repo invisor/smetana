@@ -85,6 +85,16 @@ export const REASONS = {
     tone: TONE.needsYou,
     icon: 'message-circle-question-mark'
   },
+  permission_timed_out: {
+    text: 'Stopped — permission answer needed',
+    tone: TONE.needsYou,
+    icon: 'message-circle-question-mark'
+  },
+  permission_cancelled: {
+    text: 'Stopped — waiting permission cancelled',
+    tone: TONE.quiet,
+    icon: NEUTRAL
+  },
   no_progress: { text: 'Stuck — a whole batch changed nothing', tone: TONE.failed, icon: NEUTRAL },
   max_iterations: { text: 'Stopped after too many batches', tone: TONE.failed, icon: NEUTRAL },
   unreadable: { text: 'Stopped — the tracker could not be read', tone: TONE.failed, icon: NEUTRAL },

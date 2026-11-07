@@ -14,13 +14,14 @@ import ConversationView from '@src/components/conversation/ConversationView.vue'
 import Button from '@src/components/core/Button.vue'
 import EmptyState from '@src/components/core/EmptyState.vue'
 import StatusBadge from '@src/components/status/StatusBadge.vue'
-import { drivenSessions } from '@src/stores/conversation.js'
+import { crewAgents, drivenSessions } from '@src/stores/conversation.js'
 import { terminalState, toUiState } from '@src/stores/terminals.js'
 import { invoke } from '../bridge/core.js'
 import { linesOf } from '../terminalText.js'
+import { conversationPresent } from '../agentList.js'
 
 const props = defineProps({
-  id: { type: Number, required: true },
+  id: { type: [Number, String], required: true },
   driven: { type: Boolean, default: true }
 })
 
@@ -54,7 +55,7 @@ watch(() => session.value?.state, read)
 /* A conversation closed on another device leaves the list (`session:removed`); the screen that
    was showing it has nothing left to show and gives the person back to the Agents tab. */
 watch(
-  () => props.driven && drivenSessions.value.some((s) => s.id === props.id),
+  () => conversationPresent(props.id, props.driven, drivenSessions.value, crewAgents.value),
   (present, was) => {
     if (was && !present) emit('close')
   }

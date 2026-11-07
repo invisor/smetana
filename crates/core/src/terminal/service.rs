@@ -163,7 +163,10 @@ pub enum Request {
     /// tree's menu means. It is checked with `resolve_within` like every other
     /// path this app takes from the front end; see `shell_cwd`.
     CreateShell(String, Option<String>, oneshot::Sender<Result<Session, TerminalError>>),
-    Remove(SessionId, oneshot::Sender<()>),
+    /// `Some(generation)` removes only while that exact approval is still open.
+    /// The reply is `None` when an answer already won the worker's queue.
+    Remove(SessionId, Option<u64>, oneshot::Sender<Option<bool>>),
+    Permission(SessionId, oneshot::Sender<Option<(u64, String)>>),
     Attach(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
     /// The same answer as `Attach`, from a reader that is not the window: it
     /// takes no seat. `active` and the pending output are left alone, because
@@ -226,6 +229,9 @@ pub struct TerminalHandle(pub mpsc::Sender<Request>);
 
 struct Live {
     session: Session,
+    permission_generation: u64,
+    permission_question: Option<(String, Vec<String>)>,
+    permission_submitted: bool,
     /// Which agent this session runs — layer B's own dialog reader comes
     /// from here, not from a name hardcoded in `detect.rs`. `None` for a
     /// session that runs no agent, which is the person's own shell: it has no
@@ -887,6 +893,8 @@ fn absorb(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk) 
             // separately, here, where the wait lives.
             let code = live.pty.exit_code();
             live.session.finish(code);
+            live.permission_question = None;
+            live.permission_submitted = false;
             // The process is gone: there is nobody left to call for.
             live.bell_pending = false;
             // Windows point 1: this session's own Job Object, gone at once —
@@ -1079,6 +1087,36 @@ fn flush(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, active: Option<
 /// it on. `Starting` is therefore brief, which is right — it means "created,
 /// nothing seen yet", and a session that failed to spawn never gets here to
 /// be called running.
+fn codex_permission(question: &crate::terminal::model::Question) -> bool {
+    matches!(question.text.as_str(),
+        "Would you like to run the following command?" |
+        "Would you like to make the following edits?" |
+        "Do you trust the contents of this directory?")
+}
+
+fn submits_permission(data: &str) -> bool {
+    data.contains('\r') || data.contains('\n')
+}
+
+fn permission_signature(question: &crate::terminal::model::Question) -> (String, Vec<String>) {
+    (question.text.clone(), question.options.iter().map(|option| option.label.clone()).collect())
+}
+
+fn permission_snapshot(live: &Live) -> Option<(u64, String)> {
+    let (question, _) = live.permission_question.as_ref()?;
+    Some((live.permission_generation, question.clone()))
+}
+
+fn permission_can_cancel(live: &Live, generation: u64) -> bool {
+    live.permission_generation == generation && live.permission_question.is_some() && !live.permission_submitted
+}
+
+fn note_permission_write(live: &mut Live, data: &str) {
+    if live.permission_question.is_some() && submits_permission(data) {
+        live.permission_submitted = true;
+    }
+}
+
 fn reassess(ctx: &Context, sessions: &mut HashMap<SessionId, Live>) {
     for live in sessions.values_mut() {
         if live.session.state == SessionState::Exited {
@@ -1122,6 +1160,14 @@ fn reassess(ctx: &Context, sessions: &mut HashMap<SessionId, Live>) {
         });
         let before = (live.session.state, live.session.question.clone());
         live.session.apply(out.state, out.question);
+        let permission = live.session.question.as_ref()
+            .filter(|question| live.profile.is_some_and(|profile| profile.id() == "codex") && codex_permission(question))
+            .map(permission_signature);
+        if permission != live.permission_question {
+            live.permission_generation = live.permission_generation.wrapping_add(1);
+            live.permission_question = permission;
+            live.permission_submitted = false;
+        }
         // The same predicate a conversation session uses, on the change of state and not on the tick:
         // a session that stays in `NeedsYou` for a minute of ticks reaches the phone once.
         announce_wait(before.0, live.session.state, || {
@@ -1371,6 +1417,10 @@ fn handle(
             list.sort_by_key(|s| s.id);
             let _ = tx.send(list);
         }
+        Request::Permission(id, tx) => {
+            let open = sessions.get(&id).and_then(permission_snapshot);
+            let _ = tx.send(open);
+        }
         Request::Marks(tx) => {
             let mut list: Vec<SessionMark> = sessions
                 .values()
@@ -1594,6 +1644,9 @@ fn handle(
                     session.timeline = log_entries.is_some();
                     let live = Live {
                         session: session.clone(),
+                        permission_generation: 0,
+                        permission_question: None,
+                        permission_submitted: false,
                         profile: Some(profile),
                         pty,
                         ring: Ring::new(RING_CAP),
@@ -1768,6 +1821,9 @@ fn handle(
                     );
                     let live = Live {
                         session: session.clone(),
+                        permission_generation: 0,
+                        permission_question: None,
+                        permission_submitted: false,
                         // No agent, so no layer B — see `DetectInput::profile`.
                         profile: None,
                         pty,
@@ -1801,12 +1857,17 @@ fn handle(
                 Err(err) => Err(err),
             });
         }
-        Request::Remove(id, tx) => {
+        Request::Remove(id, expected, tx) => {
+            if expected.is_some_and(|generation| !sessions.get(&id).is_some_and(|live| permission_can_cancel(live, generation))) {
+                let _ = tx.send(None);
+                return;
+            }
+            let mut terminated_job = false;
             if let Some(mut live) = sessions.remove(&id) {
                 live.pty.kill();
                 // Windows point 2: this session's own Job Object, gone at
                 // once — a no-op everywhere else.
-                live.pty.terminate_job();
+                terminated_job = live.pty.terminate_job();
                 // A person took the row away, so the offer goes with it. The
                 // front end has its own verb for a row with *no* session behind
                 // it — `terminal_forget` — and this is the same act one session
@@ -1835,7 +1896,7 @@ fn handle(
             if *active == Some(id) {
                 *active = None;
             }
-            let _ = tx.send(());
+            let _ = tx.send(Some(terminated_job));
         }
         Request::Attach(id, tx) => {
             let _ = tx.send(attach(ctx, sessions, active, id));
@@ -1883,6 +1944,11 @@ fn handle(
                     live.pty.write(data.as_bytes());
                     // The human has answered — there is nobody left to call.
                     live.bell_pending = false;
+                    // Arrows and a typed digit only move or begin a choice.
+                    // The dialog stays visible, with the same id, until its
+                    // screen actually closes. Enter protects an accepted
+                    // answer from a concurrent Stop during the repaint gap.
+                    note_permission_write(live, &data);
                     Ok(())
                 }
             });
@@ -2016,6 +2082,65 @@ fn handle(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn only_known_codex_approval_dialogs_are_permission_waits() {
+        let make = |text: &str| crate::terminal::model::Question {
+            text: text.into(),
+            options: Vec::new(),
+            selected: None,
+        };
+        assert!(super::codex_permission(&make(
+            "Would you like to run the following command?"
+        )));
+        assert!(super::codex_permission(&make(
+            "Would you like to make the following edits?"
+        )));
+        assert!(super::codex_permission(&make(
+            "Do you trust the contents of this directory?"
+        )));
+        assert!(!super::codex_permission(&make(
+            "Which approach should I take?"
+        )));
+        assert!(!super::codex_permission(&make("Update available!")));
+    }
+
+    #[test]
+    fn a_real_codex_dialog_keeps_its_id_through_arrows_and_partial_input() {
+        use crate::agents::Profile;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/codex-0.146-approval-command.txt");
+        let screen = std::fs::read_to_string(path).unwrap().lines().map(str::to_owned).collect::<Vec<_>>();
+        let question = crate::agents::codex::Codex.question(&screen).unwrap();
+        assert!(super::codex_permission(&question));
+        assert!(!super::submits_permission("\x1b[B"), "an arrow only changes the selection");
+        assert!(!super::submits_permission("1"), "a digit without Enter is incomplete");
+        assert!(super::submits_permission(&question.options[0].send), "a real option submits");
+        let mut moved_screen = screen.clone();
+        for line in &mut moved_screen {
+            if line.starts_with("› 1.") { *line = line.replacen('›', " ", 1); }
+            if line.starts_with("  2.") { *line = line.replacen("  ", "› ", 1); }
+        }
+        let moved = crate::agents::codex::Codex.question(&moved_screen).unwrap();
+        assert_eq!(moved.selected, Some(1));
+        assert_eq!(super::permission_signature(&question), super::permission_signature(&moved));
+
+        let root = scratch("codex-partial-approval");
+        let mut live = shell_live(93, &root, b"");
+        live.permission_generation = 7;
+        live.permission_question = Some(super::permission_signature(&question));
+        for input in ["\x1b[B", "1"] {
+            super::note_permission_write(&mut live, input);
+            assert_eq!(super::permission_snapshot(&live), Some((7, question.text.clone())));
+            assert!(super::permission_can_cancel(&live, 7), "{input:?} did not submit the dialog");
+        }
+        super::note_permission_write(&mut live, &question.options[0].send);
+        assert_eq!(super::permission_snapshot(&live), Some((7, question.text.clone())));
+        assert!(!super::permission_can_cancel(&live, 7), "Enter may have accepted the answer");
+        live.permission_question = None;
+        assert_eq!(super::permission_snapshot(&live), None, "only the closed dialog clears the wait");
+        live.pty.kill();
+    }
+
+    #[test]
     fn the_log_keeps_the_newest_budget_and_records_what_it_dropped() {
         let mut log = VecDeque::new();
         let mut trimmed = 0;
@@ -2130,6 +2255,9 @@ mod tests {
                 crate::terminal::model::SessionWork::Shell,
                 None,
             ),
+            permission_generation: 0,
+            permission_question: None,
+            permission_submitted: false,
             profile: None,
             pty,
             ring,

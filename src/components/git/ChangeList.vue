@@ -337,11 +337,17 @@ const icon = (change) =>
 
 /* The file's own name reads first and its directory follows it muted — the
    shape a person scans a list of changes in. Both in mono: a path is an
-   identifier. The name does not shrink and the directory does, so a deep path
-   loses its middle rather than the thing being named. */
-const nameStyle = { flex: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
-const pathStyle = (change) => ({
+   identifier. The directory yields first, but even the name must shrink when
+   it alone is wider than the panel. */
+const nameStyle = {
   flex: '0 1 auto',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+}
+const pathStyle = (change) => ({
+  flex: '0 2 auto',
   minWidth: 0,
   overflow: 'hidden',
   textOverflow: 'ellipsis',

@@ -6544,6 +6544,11 @@ const menuTargetStyle = {
              is low. The reduction is qualified working, not a state of its own
              — hence a field on the run, the way `stopping` is. -->
         <RunBar :run="runFixture({ kind: 'working', iteration: 2 }, { batches: 3, reduced: 78 })" @stop="() => {}" />
+        <RunBar
+          :run="runFixture({ kind: 'waiting_for_answer', question: 'command: curl https://example.test' }, { batches: 1, transport: 'pty' })"
+          @answer="() => {}"
+          @stop="() => {}"
+        />
         <!-- Neither working nor over: the allowance is spent and the run is
              waiting for it, which is why the glyph is a third silhouette and
              the stop button is still there. The reset line is the harness's own
@@ -6608,6 +6613,10 @@ const menuTargetStyle = {
         <!-- Somebody's own doing, like a stop, and quiet for that reason — but
              a different act, and the line is where the two are told apart. -->
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'session_removed' } })" />
+        <RunBar
+          :run="runFixture({ kind: 'stopped', reason: { kind: 'permission_timed_out', question: 'command: curl https://example.test' } }, { last_session: 4 })"
+          @answer="() => {}"
+        />
         <!-- Nobody was watching and the agent asked something anyway. The
              question takes the detail line, since what it asked is what decides
              whether somebody goes and answers it in the terminal. -->

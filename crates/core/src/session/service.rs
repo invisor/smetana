@@ -321,6 +321,9 @@ pub enum Request {
     /// worker's completion channel; it is distinct from removing the tree.
     CrewAwaitExit(u64, oneshot::Sender<crate::terminal::model::Exit>),
     CrewClear(u64),
+    /// Atomically close a Run lead only while this exact permission id is
+    /// open. The worker serialises this with `Answer` and journal updates.
+    CancelPermission(SessionId, String, bool, oneshot::Sender<bool>),
     /// The run worker's word that the batch this Crew package drove has handed
     /// its work back. Fire and forget: any child still `Starting` (never driven
     /// by a transcript of its own) is settled to `Waiting`; the package, its
@@ -335,6 +338,8 @@ pub enum Request {
     /// Wait for a driven session's child to end: the run loop's completion
     /// channel, the twin of the terminal worker's `AwaitExit`.
     AwaitExit(SessionId, oneshot::Sender<crate::terminal::model::Exit>),
+    /// The run worker records this lead's child identity before work begins.
+    SessionGroup(SessionId, oneshot::Sender<Option<u32>>),
     Attach(SessionId, oneshot::Sender<Result<Attached, SessionError>>),
     /// Everything after `seq`, or `None` when the journal no longer holds it —
     /// which is the front end's cue to take a fresh snapshot rather than draw a
@@ -751,6 +756,16 @@ fn spawnable(builder: &CommandBuilder) -> Option<tokio::process::Command> {
     Some(cmd)
 }
 
+fn isolate_run_group(command: &mut tokio::process::Command, run: bool) {
+    #[cfg(unix)]
+    if run {
+        use std::os::unix::process::CommandExt;
+        command.as_std_mut().process_group(0);
+    }
+    #[cfg(not(unix))]
+    let _ = (command, run);
+}
+
 /// The codec for a harness, or `None` for one this app cannot drive.
 ///
 /// Only the explicitly supported interactive harnesses have one. A profile without a codec is refused rather than
@@ -1034,6 +1049,9 @@ fn spawn_session(
     let Some(mut command) = spawnable(&builder) else {
         return Err(SessionError::Spawn("the driver produced no command line".into()));
     };
+    // A controlled driven Run needs the same process-group identity that a
+    // PTY Run records. A person's own conversation keeps its usual lifetime.
+    isolate_run_group(&mut command, matches!(launch.intent, Intent::Run { .. }));
 
     let mut child = command.spawn().map_err(|error| {
         SessionError::Spawn(format!("{} could not be started: {error}", profile.binary()))
@@ -2407,6 +2425,29 @@ fn handle(
                 crate::terminal::model::Exit::Removed, admitted,
             );
         }
+        Request::CancelPermission(id, question, crew, tx) => {
+            let open = sessions.get(&id).is_some_and(|live| is_open_question(live.journal.events(), &question));
+            if !open || (crew && (crew_leads.get(&id) != Some(&id) || !crews.contains_key(&id))) {
+                let _ = tx.send(false);
+                return;
+            }
+            if crew {
+                let admitted = !claude_starting.contains_key(&id);
+                clear_crew(
+                    ctx, sessions, crews, crew_ptys, claude_crews, claude_teams, claude_team_baselines,
+                    claude_expected_sessions, claude_bootstrap_members, claude_starting, claude_tails,
+                    claude_lead_tails, claude_transcript_nodes, claude_sent_briefs, crew_leads,
+                    crew_waiters, crew_exits, crew_send_waiters, id,
+                    crate::terminal::model::Exit::Removed, admitted,
+                );
+            } else if let Some(live) = sessions.get_mut(&id) {
+                mark_removed(ctx, id, live);
+                if let Some(child) = live.child.as_mut() {
+                    let _ = child.start_kill();
+                }
+            }
+            let _ = tx.send(true);
+        }
         Request::RunStart(project, intent, pinned, tx) => {
             // No `drivable` here: this is the run worker's own door, and the
             // refusal in `Start` is about a person's composer. The same
@@ -2434,6 +2475,9 @@ fn handle(
         Request::AwaitExit(id, tx) => {
             let pending = sessions.get(&id).is_some_and(|live| !live.reaped);
             await_exit(exit_waiters, exits, id, tx, pending);
+        }
+        Request::SessionGroup(id, tx) => {
+            let _ = tx.send(sessions.get(&id).and_then(|live| live.child.as_ref()).and_then(|child| child.id()));
         }
         Request::Start(project, intent, tx) => {
             if !drivable(&intent) {
@@ -2605,12 +2649,22 @@ fn handle(
             // Secrets still go to the harness, but a long-lived journal must
             // never retain their plaintext. Non-secret answers stay readable.
             let journal_answers = redact_secret_answers(live.journal.events(), &question, answers.clone());
+            let answered = EventKind::PermissionAnswered { id: question.clone(), decision, answers: journal_answers };
             append(
                 ctx,
                 id,
                 live,
-                vec![EventKind::PermissionAnswered { id: question.clone(), decision, answers: journal_answers }],
+                vec![answered.clone()],
             );
+            // The Codex Crew lead has a live journal and a mirrored root
+            // journal. `CrewAttach` reads the latter, so settle its card too.
+            if let Some(root) = crew_leads.get(&id).copied() {
+                if let Some(package) = crews.get_mut(&root) {
+                    if let Some(events) = package.append(package.root, vec![answered]) {
+                        emit_crew_events(ctx, root, package.root, events);
+                    }
+                }
+            }
             // Some harnesses take a decision over stdin instead of a channel of
             // their own; Claude Code answers `None` here and is served by the
             // listener below. Nothing here passes `answers` down that road: it
@@ -3238,6 +3292,19 @@ fn note_conversation(ctx: &Context, id: SessionId, live: &mut Live, conversation
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_driven_run_has_its_own_provable_process_group() {
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("30");
+        isolate_run_group(&mut command, true);
+        let mut child = command.spawn().unwrap();
+        let pid = child.id().unwrap() as i32;
+        assert_eq!(unsafe { libc::getpgid(pid) }, pid);
+        child.start_kill().unwrap();
+        child.wait().await.unwrap();
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn idle_codex_stop_keeps_child_alive_and_accepts_the_next_write() {

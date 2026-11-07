@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://github.com/invisor/smetana/releases/latest"><img alt="Последний релиз" src="https://img.shields.io/github/v/release/invisor/smetana"></a>
   <img alt="macOS на Apple silicon" src="https://img.shields.io/badge/macOS-Apple%20silicon-111?logo=apple&logoColor=white">
+  <img alt="Linux x86_64" src="https://img.shields.io/badge/Linux-x86__64-111?logo=linux&logoColor=white">
   <a href="https://claude.com/claude-code"><img alt="Работает с Claude Code" src="https://img.shields.io/badge/agent-Claude%20Code-d97757"></a>
   <a href="https://github.com/openai/codex"><img alt="Работает с Codex" src="https://img.shields.io/badge/agent-Codex-10a37f"></a>
 </p>
@@ -139,9 +140,9 @@ Deferred, никогда в Ready.
 
 ## Требования
 
-- **macOS на Apple silicon (arm64)** — единственная выпущенная сборка и единственная платформа, на
-  которой приложение работало. Windows и Linux нужны и запланированы: Tauri собирается под обе, в
-  релизном workflow под каждую ждёт своя строка, и ни одна пока не проверена глазами.
+- **macOS на Apple silicon (arm64)** — подписанная и нотаризованная сборка.
+- **Linux x86_64** — AppImage и .deb собираются на Ubuntu 22.04. Проверка интерфейса на Ubuntu 24.04
+  запланирована после первого релиза; вручную работа Linux-версии пока не подтверждена.
 - **CLI-харнесс, установленный и залогиненный** — [Claude Code](https://claude.com/claude-code) или
   [Codex](https://github.com/openai/codex). Приложение управляет тем инструментом командной строки,
   который у вас уже есть; это не клиент модели, и ключей оно не держит. Поддерживаются оба, но почти
@@ -150,9 +151,19 @@ Deferred, никогда в Ready.
 
 ## Установка
 
-Скачайте `.dmg` со страницы [Releases](https://github.com/invisor/smetana/releases) и перетащите
-Smetana в Applications. Приложение подписано Apple Developer ID и нотаризовано, поэтому открывается
-двойным щелчком: ничего не нужно закрывать и ничего не нужно разрешать заранее.
+Скачайте пакет со страницы [Releases](https://github.com/invisor/smetana/releases):
+
+- **macOS:** откройте `.dmg` и перетащите Smetana в Applications. Приложение подписано Apple Developer ID
+  и нотаризовано, поэтому открывается двойным щелчком.
+- **Ubuntu 22.04/24.04, x86_64:** скачайте `.deb` и установите командой
+  `sudo apt install ./Smetana_*.deb` (подставьте имя скачанного файла). `apt` установит зависимости.
+  Либо скачайте `.AppImage`, выполните `chmod +x Smetana_*.AppImage` и запустите файл. Для AppImage
+  нужен FUSE 2: на Ubuntu 22.04 установите `libfuse2`, на Ubuntu 24.04 — `libfuse2t64`, если пакет
+  отсутствует. Также нужны системные библиотеки GTK 3 и WebKitGTK 4.1.
+
+Оба пакета Linux содержат `bd` и `smetanad`; глобально устанавливать их не нужно. Приложение
+проверяет подписанные обновления и спрашивает перед установкой. Обновление `.deb` может запросить
+системную авторизацию.
 
 ## С чего начать
 
@@ -181,8 +192,8 @@ Smetana в Applications. Приложение подписано Apple Developer
 
 **Помощь с кодом тоже нужна.** Четыре вещи сейчас помогут больше всего:
 
-- **Проверить сборки под Windows и Linux.** В релизном workflow под каждую платформу ждёт своя
-  строка; на них приложение ещё никто не запускал.
+- **Проверить интерфейс Linux и добавить Windows.** Linux-пакеты собираются в CI, но интерфейс ещё
+  нужно вручную проверить на Ubuntu 24.04. Сборка Windows остаётся в планах.
 - **Ночь на Codex.** Поддерживаются оба харнесса, но почти всё тестирование до сих пор шло на Claude
   Code.
 - **Профили агентов для других харнессов.** Всё, что приложение просит у агента, написано один раз и
