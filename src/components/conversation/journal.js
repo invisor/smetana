@@ -404,7 +404,7 @@ export function visibleJournalEvents(events, hideCodexOpening) {
       hiddenPerson = true
       continue
     }
-    if (!hiddenTurnStart && event.kind === 'turn-start') {
+    if (live && !hiddenTurnStart && event.kind === 'turn-start') {
       hiddenTurnStart = true
       continue
     }

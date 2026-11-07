@@ -366,6 +366,7 @@ fn conversation() -> Vec<Event> {
         EventKind::UserMessage { text: "Hello".into(), attachments: vec!["a.png".into()] },
         EventKind::Opening { text: Some("Start".into()), attachments: vec!["b.png".into()] },
         EventKind::Opening { text: None, attachments: Vec::new() },
+        EventKind::HistoryTurnEnd,
         EventKind::Text { text: "Hi".into() },
         EventKind::TextQuestion,
         EventKind::TextDelta { text: "H".into() },
@@ -406,7 +407,7 @@ fn driven_attached() -> Vec<DrivenAttached> {
         DrivenState::Exited,
         DrivenState::Failed,
     ];
-    states
+    let mut attached: Vec<_> = states
         .into_iter()
         .enumerate()
         .map(|(i, state)| DrivenAttached {
@@ -422,7 +423,19 @@ fn driven_attached() -> Vec<DrivenAttached> {
             model: (i == 0).then(|| "opus".to_string()),
             hide_codex_opening: false,
         })
-        .collect()
+        .collect();
+    attached.push(DrivenAttached {
+        events: Vec::new(),
+        seq: 0,
+        state: DrivenState::Ready,
+        conversation: Some("codex-bare".into()),
+        cwd: "/work/smetana".into(),
+        title: None,
+        agent: "codex".into(),
+        model: None,
+        hide_codex_opening: true,
+    });
+    attached
 }
 
 fn crew_nodes() -> Vec<CrewNode> {
@@ -638,6 +651,15 @@ fn restorable() -> Vec<Restorable> {
         started_at: "2026-10-15T10:00:00Z".into(),
         title: Some("Add a thing".into()),
         hide_codex_opening: false,
+    }, Restorable {
+        session_id: "codex-bare".into(),
+        agent: "codex".into(),
+        cwd: "/work/smetana".into(),
+        project: "/work/smetana".into(),
+        work: SessionWork::Bare,
+        started_at: "2026-10-15T11:00:00Z".into(),
+        title: None,
+        hide_codex_opening: true,
     }]
 }
 

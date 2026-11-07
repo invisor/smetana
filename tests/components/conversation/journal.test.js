@@ -65,6 +65,22 @@ describe('the journal as rows', () => {
     expect(journalRows(history, 'ready', false)).toHaveLength(5)
   })
 
+  it('keeps the first real turn activity and stream after restored history', () => {
+    const history = [
+      event(1, 'user-message', { text: 'setup' }),
+      event(2, 'text', { text: 'technical answer' }),
+      event(3, 'history-turn-end'),
+      event(4, 'turn-start', { by: 'person' }),
+      event(5, 'user-message', { text: 'real request' }),
+      event(6, 'text-delta', { text: 'working' })
+    ]
+    expect(journalRows(history, 'running', true)).toEqual([
+      { key: 5, kind: 'user', text: 'real request', attachments: [] },
+      { key: 6, kind: 'agent', text: 'working', streaming: true },
+      { key: 4, kind: 'activity', state: 'streaming', startedAt: history[3].at }
+    ])
+  })
+
   it('keeps the first real answer when the technical turn had no answer', () => {
     const history = [
       event(1, 'user-message', { text: 'setup' }),

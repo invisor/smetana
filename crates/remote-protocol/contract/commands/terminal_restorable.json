@@ -1,7 +1,7 @@
 {
   "args": [{"project":"/work/smetana"}],
   "reply": [
-    [{"agent":"claude","cwd":"/work/smetana","project":"/work/smetana","sessionId":"conv-1","startedAt":"2026-10-15T10:00:00Z","title":"Add a thing","work":{"issueType":null,"kind":"newTask","parent":null,"priority":null,"text":"Add a thing"}}],
+    [{"agent":"claude","cwd":"/work/smetana","project":"/work/smetana","sessionId":"conv-1","startedAt":"2026-10-15T10:00:00Z","title":"Add a thing","work":{"issueType":null,"kind":"newTask","parent":null,"priority":null,"text":"Add a thing"}},{"agent":"codex","cwd":"/work/smetana","hideCodexOpening":true,"project":"/work/smetana","sessionId":"codex-bare","startedAt":"2026-10-15T11:00:00Z","title":null,"work":{"kind":"bare"}}],
     []
   ]
 }
