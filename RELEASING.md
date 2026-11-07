@@ -76,16 +76,18 @@ host triple and `bundle.externalBin` looks it up by the build target's, so each 
 The shared GitHub release holds the macOS `.dmg`, its signed `.app.tar.gz` updater, the Linux
 `.AppImage` and `.deb`, their signed updater assets, and one `latest.json`. That feed is what
 `plugins.updater.endpoints` points at — `https://github.com/invisor/smetana/releases/latest/download/latest.json`,
-reachable with no token because this repository is public. `releaseDraft` and `prerelease` stay
-false because the URL resolves against the latest **published** release only.
+reachable with no token because this repository is public. The matrix builds into a draft; the final `publish` job checks the uploaded `latest.json`,
+assets and native signatures before changing the draft to a published release. `prerelease`
+stays false so the URL resolves to this release once publication succeeds.
 
 `tauri-action@v1` reads the existing `latest.json` and keeps other platform entries when adding
 a row. The release matrix has `max-parallel: 1` so simultaneous writers cannot lose entries.
 The action writes `linux-x86_64-appimage` and `linux-x86_64-deb` alongside the macOS entries;
 `tauri-plugin-updater` 2.10.1 first looks for the installed bundle's format-specific key, then
 falls back to `linux-x86_64`. The fallback is AppImage, but an installed .deb selects the .deb
-key and invokes its package installer. The local contract check is
-`node scripts/check-linux-update-manifest.mjs <bundle-dir>` after signing.
+key and invokes its package installer. The final job downloads the actual draft `latest.json` and release metadata from GitHub,
+then compares its entries with uploaded asset URLs and signatures saved from both native builds.
+A failed check leaves the release as a draft and keeps it out of the updater endpoint.
 
 The `Linux desktop packages` workflow runs on pull requests and can be dispatched from the main
 branch. It uses Ubuntu 22.04 and read-only repository access, creates no release or tag, builds
