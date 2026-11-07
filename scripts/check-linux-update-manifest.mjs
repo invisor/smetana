@@ -48,9 +48,12 @@ const checkEntry = (key, assetPattern, signaturePattern) => {
 const mac = checkEntry('darwin-aarch64', /\.app\.tar\.gz$/, /\.app\.tar\.gz\.sig$/)
 const macInstaller = checkEntry('darwin-aarch64-app', /\.app\.tar\.gz$/, /\.app\.tar\.gz\.sig$/)
 if (mac.url !== macInstaller.url || mac.signature !== macInstaller.signature) throw new Error('macOS installer entry differs from macOS fallback')
-const appimage = checkEntry('linux-x86_64-appimage', /\.AppImage\.tar\.gz$/, /\.AppImage\.tar\.gz\.sig$/)
+// Tauri 2 with `createUpdaterArtifacts: true` signs the AppImage itself and
+// points the updater at it; only macOS still gets a tarball. `.AppImage.tar.gz`
+// is the `v1Compatible` layout, which this app does not build.
+const appimage = checkEntry('linux-x86_64-appimage', /\.AppImage$/, /\.AppImage\.sig$/)
 const deb = checkEntry('linux-x86_64-deb', /\.deb$/, /\.deb\.sig$/)
-const fallback = checkEntry('linux-x86_64', /\.AppImage\.tar\.gz$/, /\.AppImage\.tar\.gz\.sig$/)
+const fallback = checkEntry('linux-x86_64', /\.AppImage$/, /\.AppImage\.sig$/)
 if (fallback.url !== appimage.url || fallback.signature !== appimage.signature) throw new Error('Linux fallback does not select AppImage')
 if (deb.url === appimage.url) throw new Error('Linux installers select the same asset')
 console.log(`PASS actual updater manifest ${version}: macOS ${mac.assetName}, AppImage ${appimage.assetName}, Deb ${deb.assetName}`)

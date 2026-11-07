@@ -389,7 +389,7 @@ jobs:
           name: updater-signatures-linux
           path: |
             src-tauri/target/**/bundle/deb/*.deb.sig
-            src-tauri/target/**/bundle/appimage/*.AppImage.tar.gz.sig
+            src-tauri/target/**/bundle/appimage/*.AppImage.sig
           if-no-files-found: error
 
   publish:
