@@ -234,6 +234,7 @@ function hold(id) {
        names none; readers fall back to the settings' default harness only
        while it is unknown. */
     agent: '',
+    hideCodexOpening: false,
     /* `Attached::model` — the model that session was started with, from the
        snapshot. `''` until it lands and for a session started with no model
        flag, where the harness chose for itself. */
@@ -450,7 +451,7 @@ export async function attach(id) {
     : invoke('session_attach', { id })
   attaching.set(id, current)
   try {
-    const { events, seq, state, conversation, cwd, title, agent, model } = await current
+    const { events, seq, state, conversation, cwd, title, agent, model, hideCodexOpening } = await current
     if (attaching.get(id) !== current) return
     /* Replaced whole and never merged: this *is* the conversation, and the one
        thing a snapshot is for is being trusted over whatever was drawn before
@@ -464,6 +465,7 @@ export async function attach(id) {
        reconciles the id against `session:state`. */
     held.cwd = cwd ?? ''
     held.agent = typeof agent === 'string' ? agent : ''
+    held.hideCodexOpening = hideCodexOpening === true
     held.model = typeof model === 'string' ? model : ''
     /* The snapshot is the freshest thing anybody has about this session, so the
        record takes it too — a row drawn from a state event alone would be one

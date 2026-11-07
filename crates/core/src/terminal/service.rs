@@ -1691,13 +1691,14 @@ fn handle(
                         super::restore::record(
                             Path::new(&session.project),
                             super::restore::Restorable {
-                                session_id,
+                                session_id: session_id.clone(),
                                 agent: session.agent.clone(),
                                 cwd: session.cwd.clone(),
                                 project: session.project.clone(),
                                 work: session.work.clone(),
                                 started_at: session.started_at.clone(),
                                 title,
+                                hide_codex_opening: super::restore::hide_codex_opening(Path::new(&session.project), &session_id),
                             },
                         );
                         super::restore::announce(ctx, Path::new(&session.project));
@@ -1767,13 +1768,14 @@ fn handle(
             super::restore::record(
                 Path::new(&session.project),
                 super::restore::Restorable {
-                    session_id: conversation,
+                    session_id: conversation.clone(),
                     agent: session.agent.clone(),
                     cwd: session.cwd.clone(),
                     project: session.project.clone(),
                     work: session.work.clone(),
                     started_at: session.started_at.clone(),
                     title,
+                    hide_codex_opening: super::restore::hide_codex_opening(Path::new(&session.project), &conversation),
                 },
             );
             super::restore::announce(ctx, Path::new(&session.project));

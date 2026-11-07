@@ -90,6 +90,8 @@ const SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 /// than a budget the runtime could not clear even when healthy.
 const CLAUDE_CREW_ADMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
+fn is_false(value: &bool) -> bool { !value }
+
 /// The answer to `session_attach`: the whole conversation so far, the number
 /// events arriving after it continue from, and where the session stands.
 ///
@@ -138,6 +140,9 @@ pub struct Attached {
     /// contract on one element. The store reads an absent key as empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Visual treatment of the original Codex Bare opening, retained on resume.
+    #[serde(skip_serializing_if = "is_false")]
+    pub hide_codex_opening: bool,
 }
 
 /// A snapshot of exactly one native Crew node. Node ids stay scoped by `root`
@@ -470,6 +475,7 @@ struct Live {
     /// The model `pick_with_model` returned at the spawn, kept for `Attached`.
     /// Not part of the `agents.json` record, which does not carry one.
     model: Option<String>,
+    hide_codex_opening: bool,
     work: crate::terminal::model::SessionWork,
     started_at: String,
     /// The automatic title, in order of arrival: the person's first words at
@@ -980,6 +986,12 @@ fn spawn_session(
     // Taken before the `Launch` moves the intent, and spent after the spawn has
     // succeeded: it is what captions the row, exactly as it does one worker
     // over, so a resumed conversation is not drawn as a bare agent.
+    let hide_codex_opening = profile.id() == "codex" && match &intent {
+        Intent::Bare => true,
+        Intent::ResumeSession { id, fork: false, .. } =>
+            crate::terminal::restore::hide_codex_opening(Path::new(project), id),
+        _ => false,
+    };
     let work = intent.work();
     // A resume's own title — see `resume_title`'s own header for why this has
     // to be asked at all, rather than left to the same reduction every other
@@ -1089,6 +1101,7 @@ fn spawn_session(
         cwd: cwd.to_string_lossy().into_owned(),
         agent: profile.id().to_owned(),
         model,
+        hide_codex_opening,
         work,
         started_at,
         // The person's first words, if there were any — the opening prose a
@@ -1167,6 +1180,7 @@ fn write_record(live: &Live) -> bool {
             work: live.work.clone(),
             started_at: live.started_at.clone(),
             title: live.title.clone(),
+            hide_codex_opening: live.hide_codex_opening,
         },
     );
     true
@@ -2515,6 +2529,7 @@ fn handle(
                         title: live.title.clone(),
                         agent: live.agent.clone(),
                         model: live.model.clone(),
+                        hide_codex_opening: live.hide_codex_opening,
                     })
                 }
                 None => Err(SessionError::NoSuchSession(id)),
@@ -3360,6 +3375,7 @@ mod tests {
             title: None,
             agent: profile.id().to_owned(),
             model,
+            hide_codex_opening: false,
         };
         let wire = serde_json::to_value(&attached).unwrap();
         assert_eq!(wire["agent"], "codex");
@@ -3377,6 +3393,7 @@ mod tests {
             title: None,
             agent: "claude".into(),
             model: None,
+            hide_codex_opening: false,
         };
         assert!(serde_json::to_value(&attached).unwrap().get("model").is_none());
     }
@@ -3398,6 +3415,7 @@ mod tests {
             cwd: project.into(),
             agent: "claude".into(),
             model: None,
+            hide_codex_opening: false,
             work: crate::terminal::model::SessionWork::Bare,
             started_at: "2026-10-27T10:00:00+00:00".into(),
             title: Some("A title".into()),
@@ -3653,6 +3671,7 @@ mod tests {
                 work: crate::terminal::model::SessionWork::Bare,
                 started_at: "2026-09-04T10:00:00Z".to_owned(),
                 title: Some("Fix the login redirect".to_owned()),
+                hide_codex_opening: false,
             },
         );
         assert_eq!(resume_title(&resume("a", None, false), &root).as_deref(), Some("Fix the login redirect"));
@@ -3672,6 +3691,7 @@ mod tests {
                 work: crate::terminal::model::SessionWork::Bare,
                 started_at: "2026-09-04T10:00:00Z".to_owned(),
                 title: Some("Fix the login redirect".to_owned()),
+                hide_codex_opening: false,
             },
         );
         assert_eq!(resume_title(&resume("a", Some("Fix the login redirect"), true), &root), None);

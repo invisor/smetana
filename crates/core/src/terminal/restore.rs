@@ -58,6 +58,8 @@ pub const REGISTRY_PATH: &str = ".smetana/agents.json";
 /// finished writing.
 static TEMP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
+fn is_false(value: &bool) -> bool { !value }
+
 /// One agent session a person started, as it will be offered back after a
 /// restart.
 ///
@@ -87,6 +89,9 @@ pub struct Restorable {
     /// written before the field existed.
     #[serde(default)]
     pub title: Option<String>,
+    /// The opening exchange belongs to a Codex session started as Bare.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hide_codex_opening: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -116,6 +121,13 @@ pub fn forget(held: &mut Registry, session_id: &str) -> bool {
     let before = held.sessions.len();
     held.sessions.retain(|kept| kept.session_id != session_id);
     held.sessions.len() != before
+}
+
+/// Whether this saved conversation began as a Codex Bare session. Missing
+/// records and records from older versions leave every message visible.
+pub fn hide_codex_opening(root: &Path, session_id: &str) -> bool {
+    read(root).sessions.into_iter().find(|entry| entry.session_id == session_id)
+        .is_some_and(|entry| entry.hide_codex_opening)
 }
 
 /// The title an existing record already carries for this session, if there is
@@ -266,6 +278,7 @@ mod tests {
             work: SessionWork::Bare,
             started_at: "2026-09-04T10:00:00Z".to_owned(),
             title: None,
+            hide_codex_opening: false,
         }
     }
 
@@ -441,6 +454,23 @@ mod tests {
         record(&root, entry);
         let held = read(&root);
         assert_eq!(held.sessions[0].title.as_deref(), Some("Rename the agents panel rows"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn codex_bare_opening_marker_survives_a_restart_and_old_records_default_visible() {
+        let root = scratch("codex-opening");
+        assert!(!hide_codex_opening(&root, "missing"));
+        let mut old_json = serde_json::to_value(record_for("old")).unwrap();
+        old_json.as_object_mut().unwrap().remove("hideCodexOpening");
+        let old: Restorable = serde_json::from_value(old_json).unwrap();
+        assert!(!old.hide_codex_opening);
+        let mut marked = record_for("new");
+        marked.agent = "codex".into();
+        marked.hide_codex_opening = true;
+        record(&root, marked);
+        assert!(hide_codex_opening(&root, "new"));
+        assert!(!hide_codex_opening(&root, "old"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

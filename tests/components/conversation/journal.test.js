@@ -24,6 +24,122 @@ describe('the journal as rows', () => {
     ])
   })
 
+  it('hides only the confirmed Codex Bare opening throughout a streamed reply', () => {
+    const opening = [
+      event(1, 'turn-start', { by: 'person' }),
+      event(2, 'opening', { text: null, attachments: [] }),
+      event(3, 'text-delta', { text: 'tech ' }),
+      event(4, 'user-message', { text: 'real', attachments: ['/real.png'] }),
+      event(5, 'text-delta', { text: 'reply' }),
+      event(6, 'text', { text: 'tech reply' }),
+      event(7, 'result', { tokens_in: 1, tokens_out: 1, ms: 1 }),
+      event(8, 'turn-start', { by: 'person' }),
+      event(9, 'text-delta', { text: 'real ' }),
+      event(10, 'text', { text: 'real answer' })
+    ]
+    for (const prefix of [opening.slice(0, 3), opening.slice(0, 6), opening.slice(0, 7)]) {
+      const rows = journalRows(prefix, 'running', true)
+      expect(rows.every((row) => row.kind !== 'agent' && row.kind !== 'activity')).toBe(true)
+    }
+    expect(journalRows(opening, 'running', true)).toEqual([
+      { key: 4, kind: 'user', text: 'real', attachments: ['/real.png'] },
+      { key: 9, kind: 'agent', text: 'real answer', streaming: false },
+      { key: 8, kind: 'activity', state: 'waiting', startedAt: opening[7].at }
+    ])
+    expect(journalRows(opening, 'running', false).some((row) => row.opening)).toBe(true)
+  })
+
+  it('keeps the same technical pair hidden in restored Codex history', () => {
+    const history = [
+      event(1, 'user-message', { text: 'setup' }),
+      event(2, 'user-message', { text: 'real', attachments: ['/real.png'] }),
+      event(3, 'text', { text: 'technical acknowledgment' }),
+      event(4, 'text', { text: 'more technical text' }),
+      event(5, 'history-turn-end'),
+      event(6, 'text', { text: 'real answer' })
+    ]
+    expect(journalRows(history, 'ready', true)).toEqual([
+      { key: 2, kind: 'user', text: 'real', attachments: ['/real.png'] },
+      { key: 6, kind: 'agent', text: 'real answer' }
+    ])
+    expect(journalRows(history, 'ready', false)).toHaveLength(5)
+  })
+
+  it('keeps the first real turn activity and stream after restored history', () => {
+    const history = [
+      event(1, 'user-message', { text: 'setup' }),
+      event(2, 'text', { text: 'technical answer' }),
+      event(3, 'history-turn-end'),
+      event(4, 'turn-start', { by: 'person' }),
+      event(5, 'user-message', { text: 'real request' }),
+      event(6, 'text-delta', { text: 'working' })
+    ]
+    expect(journalRows(history, 'running', true)).toEqual([
+      { key: 5, kind: 'user', text: 'real request', attachments: [] },
+      { key: 6, kind: 'agent', text: 'working', streaming: true },
+      { key: 4, kind: 'activity', state: 'streaming', startedAt: history[3].at }
+    ])
+  })
+
+  it('keeps the first real answer when the technical turn had no answer', () => {
+    const history = [
+      event(1, 'user-message', { text: 'setup' }),
+      event(2, 'history-turn-end'),
+      event(3, 'user-message', { text: 'real request', attachments: ['/real.png'] }),
+      event(4, 'text', { text: 'real answer' }),
+      event(5, 'history-turn-end')
+    ]
+    expect(journalRows(history, 'ready', true)).toEqual([
+      { key: 3, kind: 'user', text: 'real request', attachments: ['/real.png'] },
+      { key: 4, kind: 'agent', text: 'real answer' }
+    ])
+    expect(journalRows(history.filter((event) => event.kind !== 'history-turn-end'), 'ready', true))
+      .toEqual(journalRows(history.filter((event) => event.kind !== 'history-turn-end'), 'ready', false))
+  })
+
+  it('keeps the next reply after a failed technical turn', () => {
+    const rows = journalRows([
+      event(1, 'turn-start', { by: 'person' }),
+      event(2, 'opening'),
+      event(3, 'turn-failed', { text: 'Technical turn failed' }),
+      event(4, 'user-message', { text: 'real request' }),
+      event(5, 'text', { text: 'real answer' })
+    ], 'ready', true)
+    expect(rows).toContainEqual({ key: 5, kind: 'agent', text: 'real answer' })
+    expect(rows.some((row) => row.text === 'Technical turn failed')).toBe(true)
+  })
+
+  it('keeps a later real exchange when restored opening items are missing', () => {
+    const history = [
+      event(1, 'history-turn-end'),
+      event(2, 'user-message', { text: 'real request' }),
+      event(3, 'text', { text: 'real answer' })
+    ]
+    expect(journalRows(history, 'ready', true)).toEqual([
+      { key: 2, kind: 'user', text: 'real request', attachments: [] },
+      { key: 3, kind: 'agent', text: 'real answer' }
+    ])
+  })
+
+  it('does not hide later messages when a long live journal has trimmed its opening', () => {
+    const trimmed = [event(4001, 'user-message', { text: 'later' }), event(4002, 'text', { text: 'answer' })]
+    expect(journalRows(trimmed, 'ready', true)).toEqual(journalRows(trimmed, 'ready', false))
+  })
+
+  it('keeps errors and permission answers visible while hiding the technical pair', () => {
+    const rows = journalRows([
+      event(1, 'opening'),
+      event(2, 'error', { text: 'Startup failed' }),
+      event(3, 'permission', { id: 'p', tool: 'AskUserQuestion', input: { questions: [{ question: 'Proceed?' }] } }),
+      event(4, 'permission-answered', { id: 'p', decision: 'deny', answers: null }),
+      event(5, 'text', { text: 'technical' })
+    ], 'ready', true)
+    expect(rows).toEqual([
+      { key: 2, kind: 'error', text: 'Startup failed' },
+      { key: 4, kind: 'user', text: 'Declined to answer.', attachments: [] }
+    ])
+  })
+
   /* A message sent with no files at all still has a list to draw: `attachments`
      is `Vec<String>` on the wire and never absent, but the prop it feeds takes
      an array and a missing one would be a render-time failure rather than an

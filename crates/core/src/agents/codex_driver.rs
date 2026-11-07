@@ -307,7 +307,7 @@ impl Driver for CodexDriver {
             }
             if response.as_deref() == Some("thread/read") {
                 if let Some(turns) = message.pointer("/result/thread/turns").and_then(Value::as_array) {
-                    events.extend(translate_history(turns));
+                    events.extend(translate_history_with_boundaries(turns));
                 }
                 self.startup = Some(Ok(()));
                 self.flush_opening();
@@ -633,6 +633,14 @@ fn tool_use_detail(kind: &str, item: &Value) -> Option<(&'static str, String)> {
 /// produced before it stopped — the parts of the account that are true
 /// regardless of how the turn as a whole ended.
 pub(crate) fn translate_history(turns: &[Value]) -> Vec<EventKind> {
+    translate_history_inner(turns, false)
+}
+
+fn translate_history_with_boundaries(turns: &[Value]) -> Vec<EventKind> {
+    translate_history_inner(turns, true)
+}
+
+fn translate_history_inner(turns: &[Value], boundaries: bool) -> Vec<EventKind> {
     let mut events = Vec::new();
     for turn in turns {
         let Some(items) = turn.get("items").and_then(Value::as_array) else { continue };
@@ -680,6 +688,7 @@ pub(crate) fn translate_history(turns: &[Value]) -> Vec<EventKind> {
                 _ => {}
             }
         }
+        if boundaries { events.push(EventKind::HistoryTurnEnd); }
     }
     events
 }
@@ -1502,6 +1511,7 @@ mod tests {
             EventKind::ToolUse { id: "cmd".into(), name: "commandExecution".into(), detail: "git status".into() },
             EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into(), denial: None, blocked_input: None },
             EventKind::Text { text: "Renamed it already.".into() },
+            EventKind::HistoryTurnEnd,
         ]);
         assert_eq!(driver.startup(), Some(Ok(())), "the history is what makes this conversation usable");
         assert!(driver.outgoing().is_empty(), "nothing typed yet, so nothing queued to send");
@@ -1706,6 +1716,25 @@ mod tests {
     }
 
     #[test]
+    fn history_preserves_the_first_turn_boundary_even_without_an_agent_reply() {
+        let turns = serde_json::json!([
+            {"id":"technical","items":[{"type":"userMessage","content":[{"type":"text","text":"setup"}]}]},
+            {"id":"real","items":[
+                {"type":"userMessage","content":[{"type":"text","text":"question"}]},
+                {"type":"agentMessage","text":"answer"}
+            ]}
+        ]);
+        let events = translate_history_with_boundaries(turns.as_array().unwrap());
+        assert_eq!(events, vec![
+            EventKind::UserMessage { text: "setup".into(), attachments: Vec::new() },
+            EventKind::HistoryTurnEnd,
+            EventKind::UserMessage { text: "question".into(), attachments: Vec::new() },
+            EventKind::Text { text: "answer".into() },
+            EventKind::HistoryTurnEnd,
+        ]);
+    }
+
+    #[test]
     fn translate_history_never_produces_a_turn_start_so_a_reopened_session_reads_ready_not_running() {
         // `session::history::read` keeps the identical exclusion for a
         // resumed Claude Code session, and for the identical reason: a
@@ -1719,13 +1748,14 @@ mod tests {
             r#"{"id":"a1","type":"agentMessage","text":"Found it."}"#,
             r#"]}]"#,
         )).unwrap();
-        let events = translate_history(&turns);
+        let events = translate_history_with_boundaries(&turns);
         assert_eq!(events, vec![
             EventKind::UserMessage { text: "look at this".into(), attachments: vec!["/tmp/shot.png".into()] },
             EventKind::Reasoning { text: "Checked the tests".into() },
             EventKind::ToolUse { id: "web".into(), name: "webSearch".into(), detail: "rust async book".into() },
             EventKind::ToolResult { id: "web".into(), ok: true, summary: "1 result for rust async book".into(), denial: None, blocked_input: None },
             EventKind::Text { text: "Found it.".into() },
+            EventKind::HistoryTurnEnd,
         ]);
         assert!(!events.iter().any(|event| matches!(event, EventKind::TurnStart { .. })), "{events:?}");
         assert_eq!(

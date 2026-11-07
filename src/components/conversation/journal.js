@@ -381,7 +381,47 @@ function answerText(permission, answers) {
   return entries.length === 1 ? entries[0][1] : entries.map(([q, a]) => `- **${q}**: ${a}`).join('\n')
 }
 
-export function journalRows(events = [], state) {
+/* The worker confirms this origin from the original Bare launch or its persisted
+   registry record. Only the presentation is filtered; the journal remains intact.
+   The first reply may arrive in many deltas, and a real user message may be
+   queued before it finishes. A live turn ends at result or turn-failed;
+   restored Codex history carries an explicit turn boundary. */
+export function visibleJournalEvents(events, hideCodexOpening) {
+  if (!hideCodexOpening || (events[0]?.seq > 1 && !events.some((event) => event.kind === 'opening'))) return events
+  const visible = []
+  const live = events.some((event) => event.kind === 'opening')
+  if (!live && !events.some((event) => event.kind === 'history-turn-end')) return events
+  let hiddenPerson = false
+  let hiddenReply = false
+  let hiddenTurnStart = false
+  for (const event of events) {
+    if (!live && !hiddenReply && event.kind === 'history-turn-end') {
+      hiddenPerson = true
+      hiddenReply = true
+      continue
+    }
+    if (!hiddenPerson && (event.kind === 'opening' || event.kind === 'user-message')) {
+      hiddenPerson = true
+      continue
+    }
+    if (live && !hiddenTurnStart && event.kind === 'turn-start') {
+      hiddenTurnStart = true
+      continue
+    }
+    if (hiddenPerson && !hiddenReply && (event.kind === 'text-delta' || event.kind === 'text')) {
+      continue
+    }
+    if (live && hiddenPerson && !hiddenReply && event.kind === 'turn-failed') hiddenReply = true
+    if (live && hiddenPerson && !hiddenReply && event.kind === 'result') {
+      hiddenReply = true
+      continue
+    }
+    visible.push(event)
+  }
+  return visible
+}
+
+export function journalRows(events = [], state, hideCodexOpening = false) {
   const rows = []
   const calls = new Map()
   /* `permission` events by id, so `permission-answered` can look its own
@@ -405,7 +445,7 @@ export function journalRows(events = [], state) {
      draw `0s`, indistinguishable from a turn that genuinely took none. */
   const elapsedSince = (at) => (openAt == null || at == null ? null : Date.parse(at) - Date.parse(openAt))
 
-  for (const event of events) {
+  for (const event of visibleJournalEvents(events, hideCodexOpening)) {
     if (event.kind === 'turn-start') {
       openAt = event.at
       openSeq = event.seq
