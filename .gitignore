@@ -40,3 +40,11 @@ src-tauri/binaries/*
 .design-sync/.cache/
 .design-sync/upload/
 .trash/
+
+# Beads / Dolt files (added by bd init)
+.beads/proxieddb/
+.agents
+.claude
+.codex
+CLAUDE.md
+AGENTS.md
