@@ -433,6 +433,7 @@ mod tests {
             outcome: BatchOutcome::Exited,
             left_behind: vec![],
             lock_released: None,
+            claim_release_deferred: false,
         }
     }
 

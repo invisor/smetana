@@ -225,9 +225,9 @@ a.cell.is-loud:hover{border-color:var(--tone-fg)}
 .cell.is-zero .cell-n,.cell.is-none .cell-n{color:var(--text-muted)}
 
 /* One-line outcome / stop reason */
-.stop,.outcome{display:flex;gap:var(--space-3);align-items:baseline;color:var(--text-primary);text-wrap:pretty}
+.stop,.outcome,.claim-release{display:flex;gap:var(--space-3);align-items:baseline;color:var(--text-primary);text-wrap:pretty}
 .stop{font-size:var(--text-lg)}
-.stop .g,.outcome .g{flex:none;color:var(--tone-fg,var(--text-muted))}
+.stop .g,.outcome .g,.claim-release .g{flex:none;color:var(--tone-fg,var(--text-muted))}
 
 /* Agent prose */
 .prose{display:flex;flex-direction:column;gap:var(--space-4);max-width:72ch}

@@ -1662,8 +1662,18 @@ async fn drive(
             // about to answer it.
             Batch::AnswerTimedOut { .. } => None,
             Batch::AnswerCancelled { .. } => {
-                release_claims(&tracker, &root, &repos, batch_no, &actor, &leftovers,
-                    handoff_life(handoff_gate(), life, terminal_ack)).await
+                let proof = handoff_life(handoff_gate(), life, terminal_ack);
+                match cancelled_releasable(&leftovers, proof) {
+                    Some(claims) => release_claims(&tracker, &root, &repos, batch_no, &actor, claims, proof).await,
+                    None => {
+                        account.journal.say(&format!(
+                            "batch {batch_no} claims retained: cancelled process group could not be proven stopped; leftovers={}",
+                            leftovers.len(),
+                        ));
+                        record.claim_release_deferred = true;
+                        None
+                    }
+                }
             }
             Batch::Unanswered { .. } => {
                 let reviewed: Vec<queue::Leftover> =
@@ -2112,6 +2122,7 @@ fn read_batch(dir: &Path, n: u32, seconds: u64, outcome: BatchOutcome) -> BatchL
         outcome,
         left_behind: vec![],
         lock_released: None,
+        claim_release_deferred: false,
     }
 }
 
@@ -2123,6 +2134,10 @@ fn read_batch(dir: &Path, n: u32, seconds: u64, outcome: BatchOutcome) -> BatchL
 /// `group_is_empty` refuses every answer other than a positive empty result.
 fn batch_life(group: Option<&Proc>) -> queue::BatchLife {
     batch_life_with(group, &super::procs::look, &super::procs::group_is_empty)
+}
+
+fn cancelled_releasable(leftovers: &[queue::Leftover], life: queue::BatchLife) -> Option<&[queue::Leftover]> {
+    (life == queue::BatchLife::ProvenDead).then_some(leftovers)
 }
 
 /// A leader's exit is insufficient for a handoff: its process group can still
@@ -3658,6 +3673,16 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_batch_keeps_every_claim_until_its_group_is_proven_dead() {
+        let leftovers = vec![
+            queue::Leftover { id: "task".into(), status: "in_progress".into(), lock: false },
+            queue::Leftover { id: "lock".into(), status: "in_progress".into(), lock: true },
+        ];
+        assert!(cancelled_releasable(&leftovers, queue::BatchLife::Unproven).is_none());
+        assert_eq!(cancelled_releasable(&leftovers, queue::BatchLife::ProvenDead).unwrap().len(), 2);
+    }
+
+    #[test]
     fn a_live_group_member_blocks_a_limited_handoff() {
         let group = Proc { pid: 4213, started: 10, command: "claude".into() };
         let leader_exited_but_member_writes = batch_life_with(
@@ -3723,6 +3748,7 @@ mod tests {
             outcome: BatchOutcome::Failed { code: 1 },
             left_behind: vec![],
             lock_released: None,
+            claim_release_deferred: false,
         };
         let outcome = Batch::Ended(Exit::Code(1));
         let continuation: Option<crate::agents::RunContinuation> = None;

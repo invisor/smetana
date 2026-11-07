@@ -231,7 +231,7 @@ struct Live {
     session: Session,
     permission_generation: u64,
     permission_question: Option<(String, Vec<String>)>,
-    permission_suppressed: bool,
+    permission_submitted: bool,
     /// Which agent this session runs — layer B's own dialog reader comes
     /// from here, not from a name hardcoded in `detect.rs`. `None` for a
     /// session that runs no agent, which is the person's own shell: it has no
@@ -894,7 +894,7 @@ fn absorb(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk) 
             let code = live.pty.exit_code();
             live.session.finish(code);
             live.permission_question = None;
-            live.permission_suppressed = false;
+            live.permission_submitted = false;
             // The process is gone: there is nobody left to call for.
             live.bell_pending = false;
             // Windows point 1: this session's own Job Object, gone at once —
@@ -1094,6 +1094,29 @@ fn codex_permission(question: &crate::terminal::model::Question) -> bool {
         "Do you trust the contents of this directory?")
 }
 
+fn submits_permission(data: &str) -> bool {
+    data.contains('\r') || data.contains('\n')
+}
+
+fn permission_signature(question: &crate::terminal::model::Question) -> (String, Vec<String>) {
+    (question.text.clone(), question.options.iter().map(|option| option.label.clone()).collect())
+}
+
+fn permission_snapshot(live: &Live) -> Option<(u64, String)> {
+    let (question, _) = live.permission_question.as_ref()?;
+    Some((live.permission_generation, question.clone()))
+}
+
+fn permission_can_cancel(live: &Live, generation: u64) -> bool {
+    live.permission_generation == generation && live.permission_question.is_some() && !live.permission_submitted
+}
+
+fn note_permission_write(live: &mut Live, data: &str) {
+    if live.permission_question.is_some() && submits_permission(data) {
+        live.permission_submitted = true;
+    }
+}
+
 fn reassess(ctx: &Context, sessions: &mut HashMap<SessionId, Live>) {
     for live in sessions.values_mut() {
         if live.session.state == SessionState::Exited {
@@ -1139,11 +1162,11 @@ fn reassess(ctx: &Context, sessions: &mut HashMap<SessionId, Live>) {
         live.session.apply(out.state, out.question);
         let permission = live.session.question.as_ref()
             .filter(|question| live.profile.is_some_and(|profile| profile.id() == "codex") && codex_permission(question))
-            .map(|question| (question.text.clone(), question.options.iter().map(|option| option.label.clone()).collect::<Vec<_>>()));
+            .map(permission_signature);
         if permission != live.permission_question {
             live.permission_generation = live.permission_generation.wrapping_add(1);
             live.permission_question = permission;
-            live.permission_suppressed = false;
+            live.permission_submitted = false;
         }
         // The same predicate a conversation session uses, on the change of state and not on the tick:
         // a session that stays in `NeedsYou` for a minute of ticks reaches the phone once.
@@ -1395,11 +1418,7 @@ fn handle(
             let _ = tx.send(list);
         }
         Request::Permission(id, tx) => {
-            let open = sessions.get(&id).and_then(|live| {
-                (!live.permission_suppressed).then_some(())?;
-                let (question, _) = live.permission_question.as_ref()?;
-                Some((live.permission_generation, question.clone()))
-            });
+            let open = sessions.get(&id).and_then(permission_snapshot);
             let _ = tx.send(open);
         }
         Request::Marks(tx) => {
@@ -1627,7 +1646,7 @@ fn handle(
                         session: session.clone(),
                         permission_generation: 0,
                         permission_question: None,
-                        permission_suppressed: false,
+                        permission_submitted: false,
                         profile: Some(profile),
                         pty,
                         ring: Ring::new(RING_CAP),
@@ -1802,7 +1821,7 @@ fn handle(
                         session: session.clone(),
                         permission_generation: 0,
                         permission_question: None,
-                        permission_suppressed: false,
+                        permission_submitted: false,
                         // No agent, so no layer B — see `DetectInput::profile`.
                         profile: None,
                         pty,
@@ -1837,9 +1856,7 @@ fn handle(
             });
         }
         Request::Remove(id, expected, tx) => {
-            if expected.is_some_and(|generation| !sessions.get(&id).is_some_and(|live| {
-                live.permission_generation == generation && live.permission_question.is_some() && !live.permission_suppressed
-            })) {
+            if expected.is_some_and(|generation| !sessions.get(&id).is_some_and(|live| permission_can_cancel(live, generation))) {
                 let _ = tx.send(None);
                 return;
             }
@@ -1925,7 +1942,11 @@ fn handle(
                     live.pty.write(data.as_bytes());
                     // The human has answered — there is nobody left to call.
                     live.bell_pending = false;
-                    live.permission_suppressed = true;
+                    // Arrows and a typed digit only move or begin a choice.
+                    // The dialog stays visible, with the same id, until its
+                    // screen actually closes. Enter protects an accepted
+                    // answer from a concurrent Stop during the repaint gap.
+                    note_permission_write(live, &data);
                     Ok(())
                 }
             });
@@ -2081,6 +2102,43 @@ mod tests {
     }
 
     #[test]
+    fn a_real_codex_dialog_keeps_its_id_through_arrows_and_partial_input() {
+        use crate::agents::Profile;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/codex-0.146-approval-command.txt");
+        let screen = std::fs::read_to_string(path).unwrap().lines().map(str::to_owned).collect::<Vec<_>>();
+        let question = crate::agents::codex::Codex.question(&screen).unwrap();
+        assert!(super::codex_permission(&question));
+        assert!(!super::submits_permission("\x1b[B"), "an arrow only changes the selection");
+        assert!(!super::submits_permission("1"), "a digit without Enter is incomplete");
+        assert!(super::submits_permission(&question.options[0].send), "a real option submits");
+        let mut moved_screen = screen.clone();
+        for line in &mut moved_screen {
+            if line.starts_with("› 1.") { *line = line.replacen('›', " ", 1); }
+            if line.starts_with("  2.") { *line = line.replacen("  ", "› ", 1); }
+        }
+        let moved = crate::agents::codex::Codex.question(&moved_screen).unwrap();
+        assert_eq!(moved.selected, Some(1));
+        assert_eq!(super::permission_signature(&question), super::permission_signature(&moved));
+
+        let root = scratch("codex-partial-approval");
+        let mut live = shell_live(93, &root, b"");
+        live.permission_generation = 7;
+        live.permission_question = Some(super::permission_signature(&question));
+        for input in ["\x1b[B", "1"] {
+            super::note_permission_write(&mut live, input);
+            assert_eq!(super::permission_snapshot(&live), Some((7, question.text.clone())));
+            assert!(super::permission_can_cancel(&live, 7), "{input:?} did not submit the dialog");
+        }
+        super::note_permission_write(&mut live, &question.options[0].send);
+        assert_eq!(super::permission_snapshot(&live), Some((7, question.text.clone())));
+        assert!(!super::permission_can_cancel(&live, 7), "Enter may have accepted the answer");
+        live.permission_question = None;
+        assert_eq!(super::permission_snapshot(&live), None, "only the closed dialog clears the wait");
+        live.pty.kill();
+    }
+
+    #[test]
     fn the_log_keeps_the_newest_budget_and_records_what_it_dropped() {
         let mut log = VecDeque::new();
         let mut trimmed = 0;
@@ -2197,7 +2255,7 @@ mod tests {
             ),
             permission_generation: 0,
             permission_question: None,
-            permission_suppressed: false,
+            permission_submitted: false,
             profile: None,
             pty,
             ring,

@@ -102,6 +102,9 @@ pub struct BatchLine {
     pub outcome: BatchOutcome,
     pub left_behind: Vec<Leftover>,
     pub lock_released: Option<LockRelease>,
+    /// Cancellation could not prove that the batch's writers had stopped, so
+    /// every claim was retained for recovery instead of released mid-write.
+    pub claim_release_deferred: bool,
 }
 
 /// The merge lock this batch's actor was holding when it ended, and which the
@@ -702,6 +705,10 @@ fn batch_card(out: &mut String, b: &BatchLine) {
     }
 
     left_and_released(out, &b.left_behind, &b.lock_released);
+    if b.claim_release_deferred {
+        status_line(out, "claim-release", Tone::NeedsYou,
+            "Claim release was deferred because the cancelled batch's process group could not be proven stopped.");
+    }
 
     let (tone, text) = outcome_line(&b.outcome);
     status_line(out, "outcome", tone, &text);
@@ -871,6 +878,7 @@ mod tests {
             outcome: BatchOutcome::Exited,
             left_behind: vec![],
             lock_released: None,
+            claim_release_deferred: false,
         }
     }
 
@@ -1086,6 +1094,7 @@ mod tests {
             outcome: BatchOutcome::Exited,
             left_behind: vec![],
             lock_released: None,
+            claim_release_deferred: false,
         }
     }
 
@@ -1662,6 +1671,17 @@ mod tests {
             "{html}"
         );
         assert!(!html.contains("Lock released"), "nothing was taken back: {html}");
+    }
+
+    #[test]
+    fn a_cancelled_batch_explains_why_its_claims_were_retained() {
+        let mut killed = batch(1);
+        killed.reported = false;
+        killed.claim_release_deferred = true;
+        killed.left_behind = vec![Leftover { id: "smetana-live".into(), status: "in_progress".into(), lock: false }];
+        let html = render(&report(600, None, &[killed]));
+        assert!(html.contains("Claim release was deferred because the cancelled batch's process group could not be proven stopped."), "{html}");
+        assert!(html.contains("smetana-live"), "{html}");
     }
 
     #[test]
