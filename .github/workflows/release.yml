@@ -408,6 +408,13 @@ jobs:
           pattern: updater-signatures-*
           path: ${{ runner.temp }}/updater-signatures
           merge-multiple: true
+      - name: Install pinned minisign verifier
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz -o "$RUNNER_TEMP/minisign.tar.gz"
+          echo '9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  '"$RUNNER_TEMP/minisign.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/minisign.tar.gz" -C "$RUNNER_TEMP" minisign-linux/x86_64/minisign
+          sudo install -m 0755 "$RUNNER_TEMP/minisign-linux/x86_64/minisign" /usr/local/bin/minisign
       - name: Check the uploaded release and its actual latest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -425,6 +432,26 @@ jobs:
           node scripts/check-linux-update-manifest.mjs \
             "$RUNNER_TEMP/latest.json" "$RUNNER_TEMP/release.json" \
             "$RUNNER_TEMP/updater-signatures" "${GITHUB_REF_NAME#v}"
+          # Tauri can warn and keep building when the signing secret does not
+          # match the committed public key. Verify uploaded bytes, not only the
+          # manifest and local signature text, before making updates visible.
+          node -p "require('./src-tauri/tauri.conf.json').plugins.updater.pubkey" \
+            | base64 -d > "$RUNNER_TEMP/updater.pub"
+          mkdir -p "$RUNNER_TEMP/draft-assets"
+          for platform in darwin-aarch64 linux-x86_64-appimage linux-x86_64-deb; do
+            url="$(jq -r --arg platform "$platform" '.platforms[$platform].url' "$RUNNER_TEMP/latest.json")"
+            asset_id="$(jq -r --arg url "$url" '.assets[] | select(.url == $url) | .id' "$RUNNER_TEMP/release.json")"
+            asset_name="$(jq -r --arg url "$url" '.assets[] | select(.url == $url) | .name' "$RUNNER_TEMP/release.json")"
+            test -n "$asset_id"
+            test "$asset_name" = "$(basename "$asset_name")"
+            gh api -H 'Accept: application/octet-stream' \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "$RUNNER_TEMP/draft-assets/$asset_name"
+            jq -r --arg platform "$platform" '.platforms[$platform].signature' \
+              "$RUNNER_TEMP/latest.json" | base64 -d > "$RUNNER_TEMP/$platform.minisig"
+            minisign -Vm "$RUNNER_TEMP/draft-assets/$asset_name" \
+              -p "$RUNNER_TEMP/updater.pub" -x "$RUNNER_TEMP/$platform.minisig"
+          done
           release_id="$(jq -r '.id' "$RUNNER_TEMP/release.json")"
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
             -F draft=false --silent

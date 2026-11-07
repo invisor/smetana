@@ -85,9 +85,11 @@ a row. The release matrix has `max-parallel: 1` so simultaneous writers cannot l
 The action writes `linux-x86_64-appimage` and `linux-x86_64-deb` alongside the macOS entries;
 `tauri-plugin-updater` 2.10.1 first looks for the installed bundle's format-specific key, then
 falls back to `linux-x86_64`. The fallback is AppImage, but an installed .deb selects the .deb
-key and invokes its package installer. The final job downloads the actual draft `latest.json` and release metadata from GitHub,
-then compares its entries with uploaded asset URLs and signatures saved from both native builds.
-A failed check leaves the release as a draft and keeps it out of the updater endpoint.
+key and invokes its package installer. The final job downloads the actual draft `latest.json`
+and release metadata from GitHub, then compares its entries with uploaded asset URLs and
+signatures saved from both native builds. It downloads each updater archive from the draft
+and verifies the manifest signature against the committed `plugins.updater.pubkey` with
+minisign. A failed check leaves the release as a draft and keeps it out of the updater endpoint.
 
 The `Linux desktop packages` workflow runs on pull requests and can be dispatched from the main
 branch. It uses Ubuntu 22.04 and read-only repository access, creates no release or tag, builds
