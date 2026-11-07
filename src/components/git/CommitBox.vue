@@ -177,6 +177,18 @@ const rootStyle = {
   padding: 'var(--space-3) var(--space-5) var(--space-4)'
 }
 
+/* At the sidebar's minimum width and largest UI font, the action labels need
+   two lines. Keep their full width and let the height grow with the text. */
+const actionStyle = {
+  height: 'auto',
+  minHeight: 'var(--control-h)',
+  paddingTop: 'var(--space-2)',
+  paddingBottom: 'var(--space-2)',
+  whiteSpace: 'normal',
+  overflowWrap: 'anywhere',
+  textAlign: 'center'
+}
+
 /* The field and the button it carries. The sparkle sits **inside** the field
    rather than on a row of its own, which is what leaves the commit button the
    whole width — and the whole width is what a person aims at without looking.
@@ -276,6 +288,7 @@ const errorStyle = {
       variant="secondary"
       icon="git-merge"
       full-width
+      :style="actionStyle"
       @click="emit('resolveConflicts')"
     >
       Resolve conflicts
@@ -291,7 +304,7 @@ const errorStyle = {
       v-bind="hint ? { label: hint } : {}"
       :style="{ display: 'block' }"
     >
-      <Button variant="primary" icon="check" full-width :disabled="!ready" @click="submit">
+      <Button variant="primary" icon="check" full-width :style="actionStyle" :disabled="!ready" @click="submit">
         {{ label }}
       </Button>
     </component>
