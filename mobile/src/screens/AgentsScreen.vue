@@ -73,6 +73,23 @@ async function stop(run) {
   }
 }
 
+function openRunAnswer(run) {
+  const id = run.lastSession ?? run.last_session ?? run.session
+  if (id == null) {
+    stopFailure.value = 'The waiting agent could not be found.'
+    return
+  }
+  if (run.transport === 'pty') {
+    stopFailure.value = 'Open this agent on the desktop to answer its terminal prompt.'
+    return
+  }
+  emit('open', {
+    screen: 'conversation',
+    id: run.transport === 'driven_crew' ? `crew:${id}:${id}` : id,
+    driven: true
+  })
+}
+
 const drivable = computed(() => canDrive(effectiveAgents.value.agent))
 const busy = ref(false)
 
@@ -217,6 +234,7 @@ const elapsed = (state) => ({
         :speaks="run.token === speaker"
         :busy="stopping === run.token"
         @stop="stop(run)"
+        @answer="openRunAnswer(run)"
       />
       <p v-if="stopFailure" :style="{ ...barText, color: 'var(--status-failed-fg)' }">{{ stopFailure }}</p>
     </div>

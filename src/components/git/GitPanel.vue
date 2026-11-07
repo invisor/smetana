@@ -1279,7 +1279,14 @@ const sectionStyle = (id) => {
    either with a number. */
 const reposStyle = computed(() => sectionStyle('repos'))
 
-const changesStyle = computed(() => sectionStyle('changes'))
+/* File names can be arbitrarily long. Keep this section's vertical scroller,
+   but never let a row or the commit form turn it into a horizontal one. */
+const changesStyle = computed(() => ({
+  ...sectionStyle('changes'),
+  minWidth: 0,
+  overflowX: 'hidden',
+  overflowY: 'auto'
+}))
 const branchStyle = computed(() => {
   const style = sectionStyle('branches')
   return fold.value.branchRows === null && fills.value !== 'branches'

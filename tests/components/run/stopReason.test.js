@@ -53,6 +53,8 @@ describe('how the run bar draws an ending', () => {
   it('does not paint a run waiting for an answer as a failure', () => {
     expect(stopReason('needs_answer').tone).not.toBe(TONE.failed)
     expect(stopReason('needs_answer').tone).toBe(TONE.needsYou)
+    expect(stopReason('permission_timed_out').tone).toBe(TONE.needsYou)
+    expect(stopReason('permission_cancelled').tone).toBe(TONE.quiet)
   })
 
   /* The bar and the agent row sit a few centimetres apart and must not
@@ -130,6 +132,7 @@ describe('what the second line says about an ending', () => {
     expect(endingDetail({ kind: 'needs_answer', question: 'Trust this folder?' }, 'into develop')).toBe(
       'Trust this folder?'
     )
+    expect(endingDetail({ kind: 'permission_timed_out', question: 'Allow curl?' }, 'into develop')).toBe('Allow curl?')
   })
 
   /* The one payload that is a number rather than a sentence. Without it the

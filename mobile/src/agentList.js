@@ -48,6 +48,15 @@ export function entryFor(row) {
     : { screen: 'conversation', id: driven, driven: true }
 }
 
+/* The conversation screen stays open while its row is present. Crew roots
+   and children are string ids in `crewAgents`; ordinary sessions use numbers. */
+export function conversationPresent(id, driven, sessions, crew) {
+  if (!driven) return false
+  return typeof id === 'string'
+    ? (crew ?? []).some((row) => row.id === id)
+    : (sessions ?? []).some((session) => session.id === id)
+}
+
 /* The intent that reopens an offline row: the desktop's own `resumeSession`, word for word
    (`resumeSession` in views/DesktopApp.vue). `fork` is always sent: the server's
    `Intent::ResumeSession` has no default for it and refuses the intent without. */

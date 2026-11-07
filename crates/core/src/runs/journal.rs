@@ -432,6 +432,8 @@ pub(super) fn batch_ended(
         Batch::Ended(exit) => format!("exit={exit:?}"),
         Batch::HandedBack => "ending=handed-back".to_string(),
         Batch::Unanswered { question } => format!("ending=unanswered question={question:?}"),
+        Batch::AnswerTimedOut { question } => format!("ending=permission-wait-expired question={question:?}"),
+        Batch::AnswerCancelled { question, .. } => format!("ending=permission-wait-cancelled question={question:?}"),
     };
     format!(
         "batch {n} end {how} seconds={seconds} account={} held={}",
