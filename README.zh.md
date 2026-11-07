@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://github.com/invisor/smetana/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/invisor/smetana"></a>
   <img alt="macOS Apple silicon" src="https://img.shields.io/badge/macOS-Apple%20silicon-111?logo=apple&logoColor=white">
+  <img alt="Linux x86_64" src="https://img.shields.io/badge/Linux-x86__64-111?logo=linux&logoColor=white">
   <a href="https://claude.com/claude-code"><img alt="支持 Claude Code" src="https://img.shields.io/badge/agent-Claude%20Code-d97757"></a>
   <a href="https://github.com/openai/codex"><img alt="支持 Codex" src="https://img.shields.io/badge/agent-Codex-10a37f"></a>
 </p>
@@ -84,13 +85,19 @@ Crew 和 Solo 里，会话比 run 活得久 —— 它停在提示符上，你�
 
 ## 环境要求
 
-- **macOS，Apple silicon（arm64）** —— 目前唯一发布的构建，也是应用唯一实际跑过的平台。Windows 和 Linux 都是想要且已计划的：Tauri 两边都能构建，发布流水线里各留好了一行，只是都还没有人亲眼验过。
+- **macOS，Apple silicon（arm64）** —— 已签名并公证的桌面版本。
+- **Linux x86_64** —— 在 Ubuntu 22.04 上构建 AppImage 和 .deb。Ubuntu 24.04 的界面检查安排在首次发布后；Linux 桌面版目前尚未经过人工界面验证。
 - **装好并登录的 CLI harness** —— [Claude Code](https://claude.com/claude-code) 或 [Codex](https://github.com/openai/codex)。应用驱动的是你本来就有的命令行工具；它不是模型客户端，也不保存任何密钥。两者都支持，但到目前为止几乎所有测试都在 Claude Code 上。
 - **git。**
 
 ## 安装
 
-从 [Releases](https://github.com/invisor/smetana/releases) 下载 `.dmg`，把 Smetana 拖进 Applications。它用 Apple Developer ID 签名并做过公证，双击即可打开：没有需要关掉的提示，也不需要事先授权。
+从 [Releases](https://github.com/invisor/smetana/releases) 下载对应安装包：
+
+- **macOS：**打开 `.dmg`，把 Smetana 拖进 Applications。应用已用 Apple Developer ID 签名并完成公证，可双击打开。
+- **Ubuntu 22.04/24.04，x86_64：**下载 `.deb`，运行 `sudo apt install ./Smetana_*.deb`（使用实际下载的文件名）；`apt` 会安装依赖。也可以下载 `.AppImage`，运行 `chmod +x Smetana_*.AppImage` 后启动。AppImage 需要 FUSE 2：Ubuntu 22.04 若缺少则安装 `libfuse2`，Ubuntu 24.04 安装 `libfuse2t64`。桌面环境还需要 GTK 3 和 WebKitGTK 4.1 运行库。
+
+两个 Linux 安装包都内置 `bd` 和 `smetanad`，无需全局安装。应用会检查签名更新，并在安装前请求确认；`.deb` 更新可能请求系统授权。
 
 ## 上手
 
@@ -106,7 +113,7 @@ Crew 和 Solo 里，会话比 run 活得久 —— 它停在提示符上，你�
 
 **也欢迎帮忙写代码。** 眼下最有帮助的是这四件事：
 
-- **验证 Windows 和 Linux 的构建。** 发布流水线里为两个平台各留了一行；还没有人在上面跑过这个应用。
+- **验证 Linux 桌面界面并添加 Windows。** CI 已构建 Linux 安装包，但仍需要在 Ubuntu 24.04 上人工检查界面。Windows 版本仍在计划中。
 - **在 Codex 上跑一整夜。** 两个 harness 都支持，但到目前为止几乎所有测试都在 Claude Code 上。
 - **为其他 harness 写智能体 profile。** 应用要求智能体做的每件事都只写一次，再按 harness 翻译，所以加第三个是写一份 profile，而不是重写。
 - **任何在你那儿坏掉的东西** —— 如果牵涉到 run，请附上 `.smetana/reports/` 里的运行报告：它记录了应用当时认为正在发生什么。

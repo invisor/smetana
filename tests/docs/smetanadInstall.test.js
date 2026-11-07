@@ -69,8 +69,27 @@ describe('the release job', () => {
     expect(workflow).toContain('gh release upload')
   })
 
-  it('waits for the release the app job publishes', () => {
+  it('waits for the verified desktop release to be published', () => {
     const job = workflow.slice(workflow.indexOf('\n  smetanad:'))
-    expect(job).toMatch(/needs: release\b/)
+    expect(job).toMatch(/needs: publish\b/)
+  })
+
+  it('starts server archives only after the final job verifies and publishes the draft', () => {
+    const releaseStart = workflow.indexOf('\n  release:')
+    const publishStart = workflow.indexOf('\n  publish:')
+    const serverStart = workflow.indexOf('\n  smetanad:')
+    expect(releaseStart).toBeGreaterThan(-1)
+    expect(publishStart).toBeGreaterThan(releaseStart)
+    expect(serverStart).toBeGreaterThan(publishStart)
+    const release = workflow.slice(releaseStart, publishStart)
+    expect(release).toMatch(/^\s+releaseDraft: true$/m)
+    const publish = workflow.slice(publishStart, serverStart)
+    expect(publish).toMatch(/needs: release\b/)
+    const manifestCheck = publish.indexOf('check-linux-update-manifest.mjs')
+    const signatureCheck = publish.indexOf('minisign -Vm')
+    const publication = publish.indexOf('-F draft=false')
+    expect(manifestCheck).toBeGreaterThan(-1)
+    expect(signatureCheck).toBeGreaterThan(manifestCheck)
+    expect(publication).toBeGreaterThan(signatureCheck)
   })
 })

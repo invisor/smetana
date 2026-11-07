@@ -240,15 +240,17 @@ and `cargo test` cannot see the script.
 `bundle.createUpdaterArtifacts` and the action's `uploadUpdaterJson` are what put the `.app.tar.gz`,
 its `.sig` and `latest.json` on the release. `plugins.updater.endpoints` points at
 `https://github.com/invisor/smetana/releases/latest/download/latest.json`, which is why
-`releaseDraft` and `prerelease` are both false: that URL resolves against the latest **published**
-release only.
+the release matrix builds into a draft and the final `publish` job verifies the uploaded
+`latest.json` before publishing it. `prerelease` is false; the URL resolves against the latest
+**published** release only.
 
 ## The Developer ID, and what an update would otherwise throw away
 
 The bundle is signed with a Developer ID Application certificate and notarized. The visible half of
 that is the first launch — a downloaded copy opens on a double-click, so there are no Gatekeeper
-steps left to write down anywhere, and README's `## First launch` section and the `releaseBody`
-paragraph that were the two copies of them are both gone.
+steps left to write down anywhere. README's `## First launch` section and the old Gatekeeper
+paragraph in `releaseBody` are both gone; the current release body gives macOS and Linux download
+instructions and says that the app checks signed updates before asking to install them.
 
 **The half that belongs in this file is what it does to an update.** A macOS permission is stored
 against a code requirement rather than against a bundle identifier alone. An ad-hoc signature's
@@ -278,12 +280,9 @@ already bound to a cdhash and is lost on the next update whatever this change do
 one that has been lost is the app's own reset — `.claude/rules/tracker.md` and
 `crates/core/src/tracker/access.rs` — which is the mitigation and not a replacement.
 
-One claim written before there was an updater is still standing: the `releaseBody`'s "There is no
-in-app updater yet". There were four. README's `## First launch` and `## Releases` went when
-smetana-t3y rewrote that document, and the build step's "Nothing verifies it yet — the app has no
-updater" went with the comment this change rewrote — restating a sentence known to be false was not
-available while authoring its replacement. The `releaseBody` survivor is smetana-j98's to settle, not
-this file's; do not re-sync it by putting the claim back into README.
+The old `releaseBody` claim "There is no in-app updater yet" has been removed. Its replacement
+says the app checks for signed updates and asks before installing them, matching README's release
+instructions and the updater behavior described above.
 
 ## The front end, in one paragraph
 

@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://github.com/invisor/smetana/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/invisor/smetana"></a>
   <img alt="macOS on Apple silicon" src="https://img.shields.io/badge/macOS-Apple%20silicon-111?logo=apple&logoColor=white">
+  <img alt="Linux x86_64" src="https://img.shields.io/badge/Linux-x86__64-111?logo=linux&logoColor=white">
   <a href="https://claude.com/claude-code"><img alt="Works with Claude Code" src="https://img.shields.io/badge/agent-Claude%20Code-d97757"></a>
   <a href="https://github.com/openai/codex"><img alt="Works with Codex" src="https://img.shields.io/badge/agent-Codex-10a37f"></a>
 </p>
@@ -157,9 +158,9 @@ saying what closed, what was parked, how long the whole thing took, and which mo
 
 ## Requirements
 
-- **macOS on Apple silicon (arm64)** — the only build released so far, and the only platform the app
-  has been used on. Windows and Linux are wanted and planned: Tauri builds for both, the release
-  workflow has a row waiting for each, and neither has been checked by eye yet.
+- **macOS on Apple silicon (arm64)** — signed and notarized desktop build.
+- **Linux x86_64** — AppImage and .deb built on Ubuntu 22.04. The Ubuntu 24.04 interface check is
+  planned after the first release; Linux desktop behavior has not yet been verified by eye.
 - **A harness CLI, installed and signed in** — [Claude Code](https://claude.com/claude-code) or
   [Codex](https://github.com/openai/codex). The app drives the command-line tool you already have;
   it is not a model client of its own, and it holds no keys. Both are supported, but nearly all of
@@ -168,9 +169,19 @@ saying what closed, what was parked, how long the whole thing took, and which mo
 
 ## Install
 
-Download the `.dmg` from [Releases](https://github.com/invisor/smetana/releases) and drag Smetana to
-Applications. The server comes inside it. It is signed with an Apple Developer ID and notarized, so it opens on a double-click:
-nothing to dismiss, nothing to grant first.
+Download from [Releases](https://github.com/invisor/smetana/releases):
+
+- **macOS:** Open the `.dmg` and drag Smetana to Applications. It is signed with an Apple Developer ID
+  and notarized, so it opens on a double-click.
+- **Ubuntu 22.04/24.04, x86_64:** Download the `.deb` and install it with
+  `sudo apt install ./Smetana_*.deb` (use the downloaded filename). `apt` installs the package
+  dependencies. Or download the `.AppImage`, run `chmod +x Smetana_*.AppImage`, then launch it.
+  AppImage needs FUSE 2: install `libfuse2` on Ubuntu 22.04 or `libfuse2t64` on Ubuntu 24.04 if
+  it is absent. The desktop also needs GTK 3 and WebKitGTK 4.1 runtime libraries.
+
+Both Linux packages include `bd` and `smetanad`; neither needs a separate global installation.
+The app checks for signed updates and asks before installing them. A `.deb` update may ask for
+system authorization.
 
 ## Getting started
 
@@ -199,8 +210,8 @@ short on purpose, and what people actually ask for moves up it.
 
 **Help with the code is welcome as well.** Four things would help more than anything else right now:
 
-- **Checking the Windows and Linux builds.** The release workflow has a row waiting for each
-  platform; nobody has run the app on either yet.
+- **Checking the Linux desktop build and adding Windows.** Linux packages build in CI, but a
+  person still needs to try the interface on Ubuntu 24.04. Windows remains planned.
 - **A night on Codex.** Both harnesses are supported, and almost all the testing so far has been on
   Claude Code.
 - **Agent profiles for other harnesses.** Everything the app asks an agent for is written once and

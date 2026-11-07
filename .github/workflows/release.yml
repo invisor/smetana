@@ -1,10 +1,10 @@
-# Cuts a release: push a tag v<x.y.z> and this builds the bundle and publishes a
-# GitHub release carrying it, its updater archive and signature, and latest.json.
+# Cuts a release: push a tag v<x.y.z>. Native jobs build into a draft; a final
+# job checks the real uploaded updater manifest before publishing the release.
 #
 # plugins.updater.endpoints points at
 # https://github.com/invisor/smetana/releases/latest/download/latest.json,
-# which is why the release must not be a draft or a prerelease: that URL
-# resolves against the latest published release only.
+# which resolves against the latest published release only. The draft stays
+# invisible to that endpoint until every desktop package and manifest check passes.
 #
 # What this depends on was done by a person, once, and is in place — RELEASING.md
 # records what was done and where the private halves live. Two separate
@@ -30,7 +30,7 @@ on:
     tags:
       - 'v*'
 
-# Only the job that publishes gets write.
+# The two draft upload jobs and the final publication job need release write access.
 permissions:
   contents: read
 
@@ -114,31 +114,25 @@ jobs:
           echo "all six macOS signing secrets are set"
 
   release:
-    name: Build and publish
+    name: Build and upload to draft
     needs: check
     permissions:
       contents: write
     strategy:
       fail-fast: false
+      # Each row reads and merges latest.json before uploading it. Serialize
+      # writers so the second row keeps the first row's platform entries.
+      max-parallel: 1
       matrix:
-        # One entry for now: macOS arm64. The row builds for the runner's own
-        # architecture, and that is a constraint rather than a coincidence —
-        # scripts/fetch-bd.mjs fetches the sidecar for the host triple, and
-        # bundle.externalBin looks it up by the build target's. A row that
-        # cross-compiles needs fetch-bd taught about it first. Windows and Linux
-        # are both wanted and neither has been checked by eye yet, so each is a
-        # row added here and nothing else — the steps below already carry the
-        # conditions they need:
-        #   - platform: windows-latest
-        #     rustTargets: ''
-        #     args: ''
-        #   - platform: ubuntu-22.04
-        #     rustTargets: ''
-        #     args: ''
+        # Native builds: fetch-bd and build-smetanad use the runner triple,
+        # which must match the bundle target for both embedded sidecars.
         include:
           - platform: macos-latest
             rustTargets: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
+          - platform: ubuntu-22.04
+            rustTargets: x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu --bundles appimage,deb
 
     runs-on: ${{ matrix.platform }}
 
@@ -160,13 +154,11 @@ jobs:
         with:
           targets: ${{ matrix.rustTargets }}
 
-      # Inert while the matrix holds macOS alone. It is here so that adding an
-      # ubuntu row above is the whole change.
       - name: Install the Linux build dependencies
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libfuse2
 
       - name: Install the front-end dependencies
         run: npm ci
@@ -289,7 +281,7 @@ jobs:
       # The minisign signature is a different thing entirely: Tauri's own,
       # mandatory, and what the app's updater verifies before it replaces
       # itself. Nothing about code signing touches it.
-      - name: Build the bundle and publish the release
+      - name: Build the bundle and upload to the draft release
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -302,40 +294,26 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Smetana ${{ github.ref_name }}'
-          # The Gatekeeper paragraph that stood here is gone, and so is the
-          # First launch section of README.md it was kept in step with: the
-          # bundle is signed with a Developer ID and notarized, so a downloaded
-          # copy opens on a double-click and there are no steps to give. Neither
-          # half of that pair exists any more, which is why nothing here says a
-          # thing about the first launch.
-          #
-          # The paragraph below is not part of it and is knowingly stale: the
-          # app has had an updater since smetana-oau, and smetana-t3y dropped the
-          # matching sentence from README rather than restate it in a document
-          # that advertises in-place updates a few lines above. Fixing this copy
-          # is smetana-j98's. Do not quietly re-sync the two by putting the claim
-          # back into README. Its second clause used to send a reader back to the
-          # Gatekeeper steps and had to go with them — that is a repair to a
-          # sentence this change broke, not a settling of what is left.
           releaseBody: |
-            Download the .dmg below and drag Smetana to Applications.
+            macOS (Apple silicon): download the .dmg and drag Smetana to Applications.
+            Linux (x86_64): download the .deb for Ubuntu 22.04/24.04, or run the
+            AppImage after making it executable. See README.md for dependencies.
 
-            There is no in-app updater yet, so a new version means downloading
-            the .dmg again.
-          releaseDraft: false
+            The app checks for signed updates and asks before installing them.
+          releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
           args: ${{ matrix.args }}
 
-      # This runs after the release is published and cannot stop it, and it is
-      # here anyway, because the alternative is nobody finding out. tauri-action
-      # builds and publishes in one step, so there is no moment between the two
-      # to look at what was built; and the bundler's own failure mode here is to
-      # warn and carry on — "skipping app notarization" is a log line in the
-      # middle of a green build. A red job on a published release is a person
-      # deleting a tag, which is an afternoon; a quiet unsigned release is every
-      # permission every user granted, lost on their next update, discovered
-      # weeks later.
+      - name: Check the Linux release packages
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          bundle=src-tauri/target/x86_64-unknown-linux-gnu/release/bundle
+          bash scripts/check-linux-bundles.sh "$bundle"
+
+      # Keep the release in draft until this check has passed. The bundler can
+      # warn and continue after a missing notarization credential, so its green
+      # build alone does not prove a usable macOS download.
       #
       # The three questions are the three halves of what a Developer ID buys.
       # TeamIdentifier is the one the permissions depend on — it is what the
@@ -359,17 +337,17 @@ jobs:
           codesign -dv --verbose=4 "$app" 2>&1 | tee "$RUNNER_TEMP/codesign.txt"
           if ! grep -q '^TeamIdentifier=' "$RUNNER_TEMP/codesign.txt" \
              || grep -q '^TeamIdentifier=not set' "$RUNNER_TEMP/codesign.txt"; then
-            echo "::error::the published bundle carries no TeamIdentifier — it was signed ad-hoc, and every permission a person grants it will stop matching on their next update. Delete the release and the tag."
+            echo "::error::the draft bundle carries no TeamIdentifier — it was signed ad-hoc, and every permission a person grants it will stop matching on their next update. Leave the release as a draft and repair the build."
             exit 1
           fi
           if ! spctl -a -vvv -t exec "$app" 2>&1 | tee "$RUNNER_TEMP/spctl.txt" \
              || ! grep -q 'source=Notarized Developer ID' "$RUNNER_TEMP/spctl.txt"; then
-            echo "::error::Gatekeeper does not accept the published bundle as notarized. Delete the release and the tag."
+            echo "::error::Gatekeeper does not accept the draft bundle as notarized. Leave the release as a draft and repair the build."
             cat "$RUNNER_TEMP/spctl.txt"
             exit 1
           fi
           if ! xcrun stapler validate "$app"; then
-            echo "::error::the notarization ticket is not stapled to the published bundle, so it is only accepted on a machine that can reach Apple. Delete the release and the tag."
+            echo "::error::the notarization ticket is not stapled to the draft bundle, so it is only accepted on a machine that can reach Apple. Leave the release as a draft and repair the build."
             exit 1
           fi
 
@@ -396,22 +374,104 @@ jobs:
             fi
           fi
 
-  # The headless server, one archive per platform, attached to the release the job above published.
+      - name: Save the macOS updater signature for final manifest verification
+        if: startsWith(matrix.platform, 'macos')
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-signatures-macos
+          path: src-tauri/target/**/bundle/macos/*.app.tar.gz.sig
+          if-no-files-found: error
+
+      - name: Save the Linux updater signatures for final manifest verification
+        if: startsWith(matrix.platform, 'ubuntu')
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-signatures-linux
+          path: |
+            src-tauri/target/**/bundle/deb/*.deb.sig
+            src-tauri/target/**/bundle/appimage/*.AppImage.tar.gz.sig
+          if-no-files-found: error
+
+  publish:
+    name: Verify draft and publish
+    needs: release
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: updater-signatures-*
+          path: ${{ runner.temp }}/updater-signatures
+          merge-multiple: true
+      - name: Install pinned minisign verifier
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz -o "$RUNNER_TEMP/minisign.tar.gz"
+          echo '9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  '"$RUNNER_TEMP/minisign.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/minisign.tar.gz" -C "$RUNNER_TEMP" minisign-linux/x86_64/minisign
+          sudo install -m 0755 "$RUNNER_TEMP/minisign-linux/x86_64/minisign" /usr/local/bin/minisign
+      - name: Check the uploaded release and its actual latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # GitHub's release-by-tag endpoint cannot return a draft.
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate \
+            | jq -s --arg tag "$GITHUB_REF_NAME" \
+              '[.[][] | select(.tag_name == $tag)] | if length == 1 then .[0] else error("expected one draft release") end' \
+            > "$RUNNER_TEMP/release.json"
+          asset_id="$(jq -r '.assets[] | select(.name == "latest.json") | .id' "$RUNNER_TEMP/release.json")"
+          test -n "$asset_id"
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$RUNNER_TEMP/latest.json"
+          node scripts/check-linux-update-manifest.mjs \
+            "$RUNNER_TEMP/latest.json" "$RUNNER_TEMP/release.json" \
+            "$RUNNER_TEMP/updater-signatures" "${GITHUB_REF_NAME#v}"
+          # Tauri can warn and keep building when the signing secret does not
+          # match the committed public key. Verify uploaded bytes, not only the
+          # manifest and local signature text, before making updates visible.
+          node -p "require('./src-tauri/tauri.conf.json').plugins.updater.pubkey" \
+            | base64 -d > "$RUNNER_TEMP/updater.pub"
+          mkdir -p "$RUNNER_TEMP/draft-assets"
+          for platform in darwin-aarch64 linux-x86_64-appimage linux-x86_64-deb; do
+            url="$(jq -r --arg platform "$platform" '.platforms[$platform].url' "$RUNNER_TEMP/latest.json")"
+            asset_id="$(jq -r --arg url "$url" '.assets[] | select(.url == $url) | .id' "$RUNNER_TEMP/release.json")"
+            asset_name="$(jq -r --arg url "$url" '.assets[] | select(.url == $url) | .name' "$RUNNER_TEMP/release.json")"
+            test -n "$asset_id"
+            test "$asset_name" = "$(basename "$asset_name")"
+            gh api -H 'Accept: application/octet-stream' \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "$RUNNER_TEMP/draft-assets/$asset_name"
+            jq -r --arg platform "$platform" '.platforms[$platform].signature' \
+              "$RUNNER_TEMP/latest.json" | base64 -d > "$RUNNER_TEMP/$platform.minisig"
+            minisign -Vm "$RUNNER_TEMP/draft-assets/$asset_name" \
+              -p "$RUNNER_TEMP/updater.pub" -x "$RUNNER_TEMP/$platform.minisig"
+          done
+          release_id="$(jq -r '.id' "$RUNNER_TEMP/release.json")"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F draft=false --silent
+
+  # The headless server, one archive per platform, attached after publication.
   # It is a plain `cargo build` of crates/smetanad (no Tauri, no webview, no signing identity: a
   # tarball a person unpacks on a server), so it needs none of the secrets the bundle does and none
   # of the matrix above - its own matrix is the platforms a server runs on, and each row builds for
   # the runner's own architecture for the reason fetch-bd gives (it fetches `bd` for the host triple,
   # and the archive carries that `bd` beside the server, where `smetanad run` looks for it first).
   #
-  # `needs: release` is the ordering that matters: the release does not exist until tauri-action has
-  # made it, and `gh release upload` onto a tag with no release is an error. A failed row here leaves
+  # `needs: publish` keeps the server archive behind the verified desktop release;
+  # `gh release upload` onto a tag with no release is an error. A failed row here leaves
   # the app's release in place and the missing archive visible as missing, which is the right way
   # round - the server is not the thing a desktop update depends on.
   #
   # Install instructions: server/smetanad/README.md, which is in every archive.
   smetanad:
     name: Server archive (${{ matrix.target }})
-    needs: release
+    needs: publish
     permissions:
       contents: write
     strategy:
