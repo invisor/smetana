@@ -41,11 +41,9 @@ impl Handle {
                 .map(|path| canonical(Path::new(&path)))
                 .collect();
             let mut clients = coordinator.clients.lock().await;
-            if clients.get(&client).is_some_and(|current| current.gone
-                || current.revision.is_some_and(|current| current >= revision)) {
-                return;
-            }
-            clients.insert(client, ClientPresence { revision: Some(revision), roots, gone: false });
+            let Some(current) = clients.get_mut(&client) else { return };
+            if current.revision.is_some_and(|current| current >= revision) { return; }
+            *current = ClientPresence { revision: Some(revision), roots };
             drop(clients);
             coordinator.reconcile().await;
         }
@@ -53,12 +51,9 @@ impl Handle {
 
     pub async fn client_gone(&self, client: u64) {
         if let Some(coordinator) = self.0.upgrade() {
-            // A call already running when the bridge disconnects must not
-            // reinsert this id after its presence has been removed.
-            let mut clients = coordinator.clients.lock().await;
-            let revision = clients.get(&client).and_then(|presence| presence.revision);
-            clients.insert(client, ClientPresence { revision, roots: Vec::new(), gone: true });
-            drop(clients);
+            // Only registered, live connections may publish presence. Removing
+            // the id also rejects any in-flight call that reaches us late.
+            coordinator.clients.lock().await.remove(&client);
             coordinator.reconcile().await;
         }
     }
@@ -67,7 +62,7 @@ impl Handle {
         if let Some(coordinator) = self.0.upgrade() {
             let mut clients = coordinator.clients.lock().await;
             if clients.contains_key(&client) { return; }
-            clients.insert(client, ClientPresence { revision: None, roots: Vec::new(), gone: false });
+            clients.insert(client, ClientPresence { revision: None, roots: Vec::new() });
             drop(clients);
             coordinator.reconcile().await;
         }
@@ -178,7 +173,6 @@ pub struct Coordinator {
 struct ClientPresence {
     revision: Option<u64>,
     roots: Vec<PathBuf>,
-    gone: bool,
 }
 
 impl Drop for Coordinator {
@@ -229,9 +223,8 @@ impl Coordinator {
         let mut wanted = HashMap::new();
         let mut invalid = Vec::new();
         let clients = self.clients.lock().await;
-        let live: Vec<_> = clients.values().filter(|presence| !presence.gone).collect();
-        let use_saved = !clients.values().any(|presence| presence.revision.is_some())
-            || live.iter().any(|presence| presence.revision.is_none());
+        let live: Vec<_> = clients.values().collect();
+        let use_saved = live.is_empty() || live.iter().any(|presence| presence.revision.is_none());
         if use_saved {
             for path in &settings.open_projects {
                 let key = canonical(Path::new(path));
@@ -358,9 +351,8 @@ impl Coordinator {
         }
         let managed = {
             let clients = self.clients.lock().await;
-            let live: Vec<_> = clients.values().filter(|presence| !presence.gone).collect();
-            let use_saved = !clients.values().any(|presence| presence.revision.is_some())
-                || live.iter().any(|presence| presence.revision.is_none());
+            let live: Vec<_> = clients.values().collect();
+            let use_saved = live.is_empty() || live.iter().any(|presence| presence.revision.is_none());
             (use_saved && settings.open_projects.iter().any(|path| canonical(Path::new(path)) == key))
                 || live.iter().any(|presence| presence.roots.contains(&key))
         };
@@ -851,6 +843,8 @@ mod tests {
             states: runtime.states.clone(),
         });
         let handle = Handle(Arc::downgrade(&coordinator));
+        handle.legacy_client(1).await;
+        handle.legacy_client(2).await;
         handle.presence(1, 1, vec![root.clone()]).await;
         handle.presence(2, 1, vec![root.clone()]).await;
         assert!(coordinator.projects.lock().await[&runtime.root].open.load(Ordering::SeqCst));
@@ -900,6 +894,7 @@ mod tests {
             reconcile_lock: Mutex::new(()), states: runtime.states.clone(),
         });
         let handle = Handle(Arc::downgrade(&coordinator));
+        handle.legacy_client(1).await;
         handle.presence(1, 1, vec![root]).await;
         let old = coordinator.projects.lock().await[&runtime.root].clone();
         old.policy.lock().await.changed(Instant::now() - Duration::from_secs(61));
@@ -907,6 +902,40 @@ mod tests {
         assert!(!coordinator.projects.lock().await.contains_key(&runtime.root));
         old.push_if_due().await;
         assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn disconnected_desktops_restore_headless_fallback_without_retaining_ids() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), release: None });
+        let (dir, runtime) = runtime(fake.clone());
+        let root = runtime.root.to_string_lossy().into_owned();
+        let settings_path = dir.path().join("settings.json");
+        let mut settings = file::load(&settings_path).0;
+        settings.open_projects = vec![root.clone()];
+        file::save(&settings_path, &settings).unwrap();
+        let coordinator = Arc::new(Coordinator {
+            ctx: runtime.ctx.clone(), tracker: runtime.tracker.clone(), runner: fake,
+            projects: Mutex::new(HashMap::new()), clients: Mutex::new(HashMap::new()),
+            reconcile_lock: Mutex::new(()), states: runtime.states.clone(),
+        });
+        let handle = Handle(Arc::downgrade(&coordinator));
+        for id in 1..=8 {
+            handle.legacy_client(id).await;
+            handle.presence(id, 1, vec![]).await;
+            assert!(!coordinator.projects.lock().await.contains_key(&runtime.root));
+            handle.client_gone(id).await;
+            assert!(coordinator.projects.lock().await.contains_key(&runtime.root),
+                "saved projects resume when the last modern desktop disconnects");
+            assert!(coordinator.clients.lock().await.is_empty(), "disconnected ids are removed");
+        }
+        settings.open_projects.clear();
+        file::save(&settings_path, &settings).unwrap();
+        coordinator.reconcile().await;
+        assert!(!coordinator.projects.lock().await.contains_key(&runtime.root));
+        handle.presence(8, 2, vec![root]).await;
+        assert!(!coordinator.projects.lock().await.contains_key(&runtime.root),
+            "a delayed call from a disconnected id cannot revive a closed project");
+        assert!(coordinator.clients.lock().await.is_empty());
     }
 
     #[tokio::test]
@@ -920,6 +949,7 @@ mod tests {
             reconcile_lock: Mutex::new(()), states: runtime.states.clone(),
         });
         let handle = Handle(Arc::downgrade(&coordinator));
+        handle.legacy_client(1).await;
         let project_guard = coordinator.projects.lock().await;
         let older = handle.clone();
         let old_call = tokio::spawn(async move { older.presence(1, 1, vec![root]).await });

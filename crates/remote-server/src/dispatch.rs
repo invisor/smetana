@@ -270,9 +270,6 @@ calls! {
 
     // --- settings, agents, projects
     SettingsLoad = "settings_load" { project: Option<String> } => |s, c, a| {
-        if c.kind == remote_protocol::DeviceKind::Desktop {
-            if let Some(sync) = s.ctx.as_ref().and_then(|ctx| ctx.kanban_sync()) { sync.legacy_client(c.id).await; }
-        }
         match &s.settings_path {
             Ok(path) => answer(crate::settings::commands::load_from(path, a.project)),
             Err(message) => answer(Err::<(), _>(crate::settings::commands::SettingsError::Dir(message.clone()))),
@@ -525,6 +522,14 @@ calls! {
 }
 
 impl Dispatch for Services {
+    fn client_join<'a>(&'a self, caller: &'a Caller) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if caller.kind == remote_protocol::DeviceKind::Desktop {
+                if let Some(sync) = self.ctx.as_ref().and_then(|ctx| ctx.kanban_sync()) { sync.legacy_client(caller.id).await; }
+            }
+        })
+    }
+
     fn serves(&self, cmd: &str) -> bool {
         match cmd {
             "server_restart" | "server_work" | "server:restart-deferred" => self.gateway.is_some(),

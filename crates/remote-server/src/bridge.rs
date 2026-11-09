@@ -92,6 +92,11 @@ pub trait Dispatch: Send + Sync {
         Box::pin(async { None })
     }
 
+    /// A device has a live connection. Called before its first command.
+    fn client_join<'a>(&'a self, _caller: &'a Caller) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
+
     /// A device's connection ended: whatever the workers keep for it can go.
     fn client_gone<'a>(&'a self, _caller: &'a Caller) -> BoxFuture<'a, ()> {
         Box::pin(async {})
@@ -735,6 +740,9 @@ pub(crate) async fn serve(
     let (id, outbox) = remote.hub.register(queue.clone(), conn.clone(), kind);
     let caller = Caller { id, kind };
     let writer = tokio::spawn(write_loop(send, outgoing, outbox.clone(), remote.hub.dispatch.get().cloned()));
+    if let Some(dispatch) = remote.hub.dispatch.get() {
+        dispatch.client_join(&caller).await;
+    }
     let mut calls = JoinSet::new();
     loop {
         let msg = match read_frame::<ClientMsg>(&mut recv, CLIENT_FRAME_LIMIT).await {
