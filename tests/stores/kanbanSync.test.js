@@ -7,9 +7,26 @@ describe('project-addressed Kanban sync state', () => {
     const sync = await import('../../src/stores/kanbanSync.js')
     ipc.on('kanban_sync_presence', null)
     await sync.publishOpenProjects(['/a', '/b'])
-    expect(ipc.calls('kanban_sync_presence')).toEqual([{ projects: ['/a', '/b'] }])
+    expect(ipc.calls('kanban_sync_presence')).toEqual([{ projects: ['/a', '/b'], revision: 1 }])
     await sync.publishOpenProjects(['/b'])
-    expect(ipc.calls('kanban_sync_presence').at(-1)).toEqual({ projects: ['/b'] })
+    expect(ipc.calls('kanban_sync_presence').at(-1)).toEqual({ projects: ['/b'], revision: 2 })
+  })
+
+  it('numbers overlapping presence calls even when the older reply finishes last', async () => {
+    const { ipc } = await loadStores()
+    const sync = await import('../../src/stores/kanbanSync.js')
+    let finishOlder
+    ipc.on('kanban_sync_presence', ({ revision }) => revision === 1
+      ? new Promise((resolve) => { finishOlder = resolve })
+      : null)
+    const older = sync.publishOpenProjects(['/a', '/b'])
+    await sync.publishOpenProjects(['/a'])
+    finishOlder(null)
+    await older
+    expect(ipc.calls('kanban_sync_presence')).toEqual([
+      { projects: ['/a', '/b'], revision: 1 },
+      { projects: ['/a'], revision: 2 }
+    ])
   })
 
   it('keeps two projects separate and clears only the successful operation', async () => {

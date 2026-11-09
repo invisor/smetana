@@ -32,7 +32,7 @@ pub struct State {
 pub struct Handle(Weak<Coordinator>);
 
 impl Handle {
-    pub async fn presence(&self, client: u64, projects: Vec<String>) {
+    pub async fn presence(&self, client: u64, revision: u64, projects: Vec<String>) {
         if let Some(coordinator) = self.0.upgrade() {
             let roots = projects
                 .into_iter()
@@ -40,14 +40,35 @@ impl Handle {
                 .take(crate::settings::model::MAX_OPEN)
                 .map(|path| canonical(Path::new(&path)))
                 .collect();
-            coordinator.clients.lock().await.insert(client, roots);
+            let mut clients = coordinator.clients.lock().await;
+            if clients.get(&client).is_some_and(|current| current.gone
+                || current.revision.is_some_and(|current| current >= revision)) {
+                return;
+            }
+            clients.insert(client, ClientPresence { revision: Some(revision), roots, gone: false });
+            drop(clients);
             coordinator.reconcile().await;
         }
     }
 
     pub async fn client_gone(&self, client: u64) {
         if let Some(coordinator) = self.0.upgrade() {
-            coordinator.clients.lock().await.remove(&client);
+            // A call already running when the bridge disconnects must not
+            // reinsert this id after its presence has been removed.
+            let mut clients = coordinator.clients.lock().await;
+            let revision = clients.get(&client).and_then(|presence| presence.revision);
+            clients.insert(client, ClientPresence { revision, roots: Vec::new(), gone: true });
+            drop(clients);
+            coordinator.reconcile().await;
+        }
+    }
+
+    pub async fn legacy_client(&self, client: u64) {
+        if let Some(coordinator) = self.0.upgrade() {
+            let mut clients = coordinator.clients.lock().await;
+            if clients.contains_key(&client) { return; }
+            clients.insert(client, ClientPresence { revision: None, roots: Vec::new(), gone: false });
+            drop(clients);
             coordinator.reconcile().await;
         }
     }
@@ -149,8 +170,15 @@ pub struct Coordinator {
     tracker: TrackerHandle,
     runner: Arc<dyn command::Runner>,
     projects: Mutex<HashMap<PathBuf, Arc<ProjectSync>>>,
-    clients: Mutex<HashMap<u64, Vec<PathBuf>>>,
+    clients: Mutex<HashMap<u64, ClientPresence>>,
+    reconcile_lock: Mutex<()>,
     states: Arc<Mutex<HashMap<PathBuf, State>>>,
+}
+
+struct ClientPresence {
+    revision: Option<u64>,
+    roots: Vec<PathBuf>,
+    gone: bool,
 }
 
 impl Drop for Coordinator {
@@ -170,6 +198,7 @@ pub fn start(ctx: Context, tracker: TrackerHandle) -> Arc<Coordinator> {
         runner: Arc::new(command::Shell),
         projects: Mutex::new(HashMap::new()),
         clients: Mutex::new(HashMap::new()),
+        reconcile_lock: Mutex::new(()),
         states: Arc::new(Mutex::new(HashMap::new())),
     });
     ctx.install_kanban_sync(Handle(Arc::downgrade(&coordinator)));
@@ -193,25 +222,32 @@ impl Coordinator {
     }
 
     async fn reconcile(&self) {
+        let _reconcile_guard = self.reconcile_lock.lock().await;
         let Some(settings) = self.settings() else {
             return;
         };
         let mut wanted = HashMap::new();
         let mut invalid = Vec::new();
-        for path in &settings.open_projects {
-            let key = canonical(Path::new(path));
-            let config = config_for(&settings, &key).cloned().unwrap_or_default();
-            if config.enabled {
-                match config.check() {
-                    Ok(()) => {
-                        wanted.insert(key, config);
+        let clients = self.clients.lock().await;
+        let live: Vec<_> = clients.values().filter(|presence| !presence.gone).collect();
+        let use_saved = !clients.values().any(|presence| presence.revision.is_some())
+            || live.iter().any(|presence| presence.revision.is_none());
+        if use_saved {
+            for path in &settings.open_projects {
+                let key = canonical(Path::new(path));
+                let config = config_for(&settings, &key).cloned().unwrap_or_default();
+                if config.enabled {
+                    match config.check() {
+                        Ok(()) => {
+                            wanted.insert(key, config);
+                        }
+                        Err(reason) => invalid.push((key, reason)),
                     }
-                    Err(reason) => invalid.push((key, reason)),
                 }
             }
         }
-        for paths in self.clients.lock().await.values() {
-            for key in paths {
+        for presence in live {
+            for key in &presence.roots {
                 let config = config_for(&settings, key).cloned().unwrap_or_default();
                 if config.enabled {
                     match config.check() {
@@ -260,6 +296,7 @@ impl Coordinator {
             }
         });
         drop(projects);
+        drop(clients);
         for key in created {
             let state = State { project: key.to_string_lossy().into_owned(), ..State::default() };
             if self.states.lock().await.insert(key, state.clone()).is_some_and(|old| old != state) {
@@ -319,16 +356,19 @@ impl Coordinator {
             );
             return Err(failure);
         }
+        let managed = {
+            let clients = self.clients.lock().await;
+            let live: Vec<_> = clients.values().filter(|presence| !presence.gone).collect();
+            let use_saved = !clients.values().any(|presence| presence.revision.is_some())
+                || live.iter().any(|presence| presence.revision.is_none());
+            (use_saved && settings.open_projects.iter().any(|path| canonical(Path::new(path)) == key))
+                || live.iter().any(|presence| presence.roots.contains(&key))
+        };
         let runtime = {
             let mut projects = self.projects.lock().await;
             if let Some(runtime) = projects.get(&key) {
                 runtime.clone()
             } else {
-                let managed = settings
-                    .open_projects
-                    .iter()
-                    .any(|path| canonical(Path::new(path)) == key)
-                    || self.clients.lock().await.values().any(|paths| paths.contains(&key));
                 let runtime = ProjectSync::new(
                     self.ctx.clone(),
                     self.tracker.clone(),
@@ -805,19 +845,95 @@ mod tests {
         settings.open_projects = vec![root.clone()];
         file::save(&dir.path().join("settings.json"), &settings).unwrap();
         let coordinator = Arc::new(Coordinator {
-            ctx: runtime.ctx.clone(), tracker: runtime.tracker.clone(), runner: fake,
+            ctx: runtime.ctx.clone(), tracker: runtime.tracker.clone(), runner: fake.clone(),
             projects: Mutex::new(HashMap::new()), clients: Mutex::new(HashMap::new()),
+            reconcile_lock: Mutex::new(()),
             states: runtime.states.clone(),
         });
         let handle = Handle(Arc::downgrade(&coordinator));
-        handle.presence(1, vec![root.clone()]).await;
-        handle.presence(2, vec![root.clone()]).await;
+        handle.presence(1, 1, vec![root.clone()]).await;
+        handle.presence(2, 1, vec![root.clone()]).await;
         assert!(coordinator.projects.lock().await[&runtime.root].open.load(Ordering::SeqCst));
-        settings.open_projects.clear();
-        file::save(&dir.path().join("settings.json"), &settings).unwrap();
-        handle.presence(1, vec![]).await;
+        handle.presence(1, 2, vec![]).await;
         assert!(coordinator.projects.lock().await[&runtime.root].open.load(Ordering::SeqCst));
+        let old_runtime = coordinator.projects.lock().await[&runtime.root].clone();
+        old_runtime.policy.lock().await.changed(Instant::now() - Duration::from_secs(61));
+        let command_guard = old_runtime.command_lock.lock().await;
+        let requested = old_runtime.clone();
+        let queued_pull = tokio::spawn(async move { requested.pull().await });
+        tokio::task::yield_now().await;
+        handle.presence(2, 2, vec![]).await;
+        assert!(!coordinator.projects.lock().await.contains_key(&runtime.root),
+            "reported empty presence overrides a stale saved open list immediately");
+        drop(command_guard);
+        queued_pull.await.unwrap().unwrap();
+        old_runtime.push_if_due().await;
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 0, "the due push was cancelled");
+        handle.presence(2, 1, vec![root.clone()]).await;
+        assert!(!coordinator.projects.lock().await.contains_key(&runtime.root),
+            "an older request that arrived last cannot reopen the project");
+        handle.presence(2, 3, vec![root.clone()]).await;
+        assert!(coordinator.projects.lock().await.contains_key(&runtime.root));
         handle.client_gone(2).await;
+        assert!(!coordinator.projects.lock().await.contains_key(&runtime.root));
+        handle.presence(2, 4, vec![root.clone()]).await;
+        assert!(!coordinator.projects.lock().await.contains_key(&runtime.root),
+            "a request finishing after client_gone cannot restore its watcher");
+        handle.legacy_client(3).await;
+        assert!(coordinator.projects.lock().await.contains_key(&runtime.root),
+            "an older desktop still uses the saved project list");
+        handle.client_gone(3).await;
+        assert!(!coordinator.projects.lock().await.contains_key(&runtime.root));
+    }
+
+    #[tokio::test]
+    async fn empty_presence_cancels_due_work_while_saved_list_is_stale() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), release: None });
+        let (dir, runtime) = runtime(fake.clone());
+        let root = runtime.root.to_string_lossy().into_owned();
+        let mut settings = file::load(&dir.path().join("settings.json")).0;
+        settings.open_projects = vec![root.clone()];
+        file::save(&dir.path().join("settings.json"), &settings).unwrap();
+        let coordinator = Arc::new(Coordinator {
+            ctx: runtime.ctx.clone(), tracker: runtime.tracker.clone(), runner: fake.clone(),
+            projects: Mutex::new(HashMap::new()), clients: Mutex::new(HashMap::new()),
+            reconcile_lock: Mutex::new(()), states: runtime.states.clone(),
+        });
+        let handle = Handle(Arc::downgrade(&coordinator));
+        handle.presence(1, 1, vec![root]).await;
+        let old = coordinator.projects.lock().await[&runtime.root].clone();
+        old.policy.lock().await.changed(Instant::now() - Duration::from_secs(61));
+        handle.presence(1, 2, vec![]).await;
+        assert!(!coordinator.projects.lock().await.contains_key(&runtime.root));
+        old.push_if_due().await;
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn newer_presence_wins_while_an_older_reconcile_is_waiting() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), release: None });
+        let (_dir, runtime) = runtime(fake.clone());
+        let root = runtime.root.to_string_lossy().into_owned();
+        let coordinator = Arc::new(Coordinator {
+            ctx: runtime.ctx.clone(), tracker: runtime.tracker.clone(), runner: fake,
+            projects: Mutex::new(HashMap::new()), clients: Mutex::new(HashMap::new()),
+            reconcile_lock: Mutex::new(()), states: runtime.states.clone(),
+        });
+        let handle = Handle(Arc::downgrade(&coordinator));
+        let project_guard = coordinator.projects.lock().await;
+        let older = handle.clone();
+        let old_call = tokio::spawn(async move { older.presence(1, 1, vec![root]).await });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if coordinator.clients.try_lock().is_err() { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("older reconcile holds the client generation through application");
+        let newer = handle.clone();
+        let new_call = tokio::spawn(async move { newer.presence(1, 2, vec![]).await });
+        drop(project_guard);
+        old_call.await.unwrap();
+        new_call.await.unwrap();
         assert!(!coordinator.projects.lock().await.contains_key(&runtime.root));
     }
 
@@ -869,6 +985,7 @@ mod tests {
             runner: fake,
             projects: Mutex::new(HashMap::from([(runtime.root.clone(), runtime.clone())])),
             clients: Mutex::new(HashMap::new()),
+            reconcile_lock: Mutex::new(()),
             states: runtime.states.clone(),
         });
         let handle = Handle(Arc::downgrade(&coordinator));

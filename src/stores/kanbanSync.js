@@ -8,12 +8,14 @@ let initialization = null
 const eventSerial = {}
 let openProjects = []
 let openTarget = null
+let presenceRevision = 0
 
 export async function publishOpenProjects(projects) {
   openProjects = [...projects]
   openTarget = connection.target
+  const revision = ++presenceRevision
   try {
-    await invoke('kanban_sync_presence', { projects: openProjects })
+    await invoke('kanban_sync_presence', { projects: openProjects, revision })
   } catch (error) {
     console.warn('[kanban sync] could not publish open projects:', error)
   }

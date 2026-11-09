@@ -269,9 +269,14 @@ calls! {
         => |s, c, a| plain(crate::tracker::access::home().map(|home| home.to_string_lossy().into_owned()));
 
     // --- settings, agents, projects
-    SettingsLoad = "settings_load" { project: Option<String> } => |s, c, a| match &s.settings_path {
-        Ok(path) => answer(crate::settings::commands::load_from(path, a.project)),
-        Err(message) => answer(Err::<(), _>(crate::settings::commands::SettingsError::Dir(message.clone()))),
+    SettingsLoad = "settings_load" { project: Option<String> } => |s, c, a| {
+        if c.kind == remote_protocol::DeviceKind::Desktop {
+            if let Some(sync) = s.ctx.as_ref().and_then(|ctx| ctx.kanban_sync()) { sync.legacy_client(c.id).await; }
+        }
+        match &s.settings_path {
+            Ok(path) => answer(crate::settings::commands::load_from(path, a.project)),
+            Err(message) => answer(Err::<(), _>(crate::settings::commands::SettingsError::Dir(message.clone()))),
+        }
     };
     SettingsSave = "settings_save" { settings: crate::settings::model::ResolvedSettings }
         => |s, c, a| answer(crate::settings::commands::settings_save(s.ctx()?, a.settings).await);
@@ -305,8 +310,10 @@ calls! {
         let Some(sync) = s.ctx()?.kanban_sync() else { return plain(crate::tracker::sync::State::default()); };
         plain(sync.state(&a.project).await)
     };
-    KanbanSyncPresence = "kanban_sync_presence" { projects: Vec<String> } => |s, c, a| {
-        if let Some(sync) = s.ctx()?.kanban_sync() { sync.presence(c.id, a.projects).await; }
+    KanbanSyncPresence = "kanban_sync_presence" { projects: Vec<String>, revision: u64 } => |s, c, a| {
+        if c.kind == remote_protocol::DeviceKind::Desktop {
+            if let Some(sync) = s.ctx()?.kanban_sync() { sync.presence(c.id, a.revision, a.projects).await; }
+        }
         plain(())
     };
     RunStart = "run_start" { project: String, settings: RunSettings }
@@ -552,7 +559,9 @@ impl Dispatch for Services {
     fn client_gone<'a>(&'a self, caller: &'a Caller) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             let _ = crate::terminal::commands::plain::forget_client(&self.terminal, caller.id).await;
-            if let Some(sync) = self.ctx.as_ref().and_then(|ctx| ctx.kanban_sync()) { sync.client_gone(caller.id).await; }
+            if caller.kind == remote_protocol::DeviceKind::Desktop {
+                if let Some(sync) = self.ctx.as_ref().and_then(|ctx| ctx.kanban_sync()) { sync.client_gone(caller.id).await; }
+            }
         })
     }
 }
