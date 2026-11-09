@@ -48,3 +48,6 @@ src-tauri/binaries/*
 .codex
 CLAUDE.md
 AGENTS.md
+
+# Smetana
+.beads.backup-*/
