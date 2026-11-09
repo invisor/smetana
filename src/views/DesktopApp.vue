@@ -58,6 +58,7 @@ import {
   toggleChanges
 } from '../components/git/changesFold.js'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
+import { initKanbanSync, readKanbanSync, pullKanbanSync, syncProblem, kanbanSyncState } from '../stores/kanbanSync.js'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
@@ -207,6 +208,7 @@ import {
 import {
   applyPatch,
   effectiveAgents,
+  flushPending,
   initSettingsBridge,
   settings,
   stopAskingBeforeClosingTerminals
@@ -2664,6 +2666,7 @@ const openProjectSettings = async (path) => {
          today; `rootAgent`/`rootModel`/`rootAgentRoles` are what turning the
          switch on seeds the draft from. */
       agents: settings.project.agents,
+      kanbanSync: settings.project.kanbanSync,
       rootAgent: settings.agent,
       rootModel: settings.model,
       rootAgentRoles: settings.agentRoles
@@ -2712,6 +2715,9 @@ const saveProjectSettings = async (payload) => {
        present block as complete and never partial, so the whole draft — or
        `null` for "back to the root table" — is what lands here. */
     settings.project.agents = payload.agents
+    settings.project.kanbanSync = payload.kanbanSync
+    await flushPending()
+    await readKanbanSync(project)
     closeDialog('project-settings')
   } catch (err) {
     /* Shown in the window rather than swallowed: both refusals the command has
@@ -6939,7 +6945,9 @@ watch(
    background and are not killed — a project switch that killed another
    project's work would be the same class of loss that `stale` guards
    against in the files layer. */
+onMounted(() => initKanbanSync().then(() => readKanbanSync(activePath.value)))
 watch(activePath, (path) => {
+  initKanbanSync().then(() => readKanbanSync(path))
   loadSessions(path)
   loadHead(path)
   loadConfig(path)
@@ -6952,6 +6960,27 @@ watch(activePath, (path) => {
      `.beads`, so left standing it would sit over the next project telling
      somebody about a copy that is not in it. */
   repairNote.value = null
+})
+
+watch(activePath, async (path) => {
+  if (!path) return
+  await initKanbanSync()
+  await readKanbanSync(path)
+}, { immediate: true })
+watch(
+  () => [activePath.value, project.activeTab],
+  async ([path, tab], previous) => {
+    if (!path || tab !== 'kanban') return
+    if (previous?.[0] === path && previous?.[1] === tab) return
+    await initKanbanSync()
+    if (activePath.value === path && project.activeTab === 'kanban') pullKanbanSync(path)
+  },
+  { immediate: true }
+)
+const kanbanSyncProblem = computed(() => {
+  // The dependency ensures a late event updates the already open board.
+  void kanbanSyncState.projects[kanbanSyncState.keys[activePath.value] ?? activePath.value]
+  return syncProblem(activePath.value)
 })
 
 /* The Sessions tab reads the disk when it is opened, and again whenever the
@@ -8364,6 +8393,13 @@ const toastStackStyle = {
          other, and a tracker failure would hide a disk failure exactly when
          both are broken. -->
     <div :style="toastStackStyle">
+      <Toast
+        v-if="kanbanSyncProblem"
+        tone="error"
+        :closable="false"
+        :title="`Kanban ${kanbanSyncProblem.operation} failed`"
+        :description="kanbanSyncProblem.stderr || (kanbanSyncProblem.timedOut ? 'Command timed out.' : `Exit code ${kanbanSyncProblem.code ?? 'unknown'}`)"
+      />
       <Toast
         v-if="trackerState.lastError"
         tone="error"

@@ -297,6 +297,14 @@ calls! {
     // --- runs
     RunState = "run_state" { project: String } => |s, c, a| answer(crate::runs::commands::state(&s.runs, a.project).await);
     RunReports = "run_reports" { project: String } => |s, c, a| plain(crate::runs::commands::run_reports(a.project).await);
+    KanbanSyncPull = "kanban_sync_pull" { project: String } => |s, c, a| {
+        let Some(sync) = s.ctx()?.kanban_sync() else { return plain(()); };
+        answer(sync.pull(&a.project).await)
+    };
+    KanbanSyncState = "kanban_sync_state" { project: String } => |s, c, a| {
+        let Some(sync) = s.ctx()?.kanban_sync() else { return plain(crate::tracker::sync::State::default()); };
+        plain(sync.state(&a.project).await)
+    };
     RunStart = "run_start" { project: String, settings: RunSettings }
         => |s, c, a| answer(crate::runs::commands::start(&s.runs, a.project, a.settings).await);
     RunStop = "run_stop" { token: u64 } => |s, c, a| answer(crate::runs::commands::stop(&s.runs, a.token).await);
@@ -510,6 +518,7 @@ impl Dispatch for Services {
         match cmd {
             "server_restart" | "server_work" | "server:restart-deferred" => self.gateway.is_some(),
             "server_health" => self.ctx.is_some(),
+            "kanban_sync_pull" | "kanban_sync_state" => self.ctx.as_ref().is_some_and(|ctx| ctx.kanban_sync().is_some()),
             _ => true,
         }
     }

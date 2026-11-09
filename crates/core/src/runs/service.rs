@@ -48,13 +48,13 @@ use super::model::{
 use super::preflight;
 use super::queue::{self, Action, LastBatch, QueueSnapshot};
 use super::recovery;
-use super::rest;
 use super::registry::{self, Proc};
 use super::report::{self, BatchLine, BatchOutcome, LockRelease};
+use super::rest;
 use super::summary::{self, Baseline, RunSummary};
 use super::usage::{self, Decision};
-use crate::agents::{Intent, Profile};
 use crate::agents::crew::CrewCapabilities;
+use crate::agents::{Intent, Profile};
 use crate::runs::session::{self, RunSession, Transport};
 use crate::session::service::SessionHandle;
 use crate::terminal::model::{Exit, SessionState};
@@ -596,6 +596,7 @@ fn handle(
                 terminal.clone(),
                 session.clone(),
                 run_session,
+                ctx.kanban_sync().cloned(),
                 report.clone(),
                 stop_rx,
                 // Owned rather than borrowed: `drive` is spawned onto a task
@@ -896,6 +897,7 @@ async fn drive(
     terminal: TerminalHandle,
     session: SessionHandle,
     run_session: RunSession,
+    kanban_sync: Option<crate::tracker::sync::Handle>,
     report: mpsc::UnboundedSender<Report>,
     mut stop: mpsc::Receiver<()>,
     // Where a headless probe of this run's own harness runs — the gate and
@@ -1284,6 +1286,7 @@ async fn drive(
         let session = match spawn_batch(
             &transport,
             &run,
+            kanban_sync.as_ref(),
             tasks,
             &current_agent,
             &account.reports,
@@ -1459,9 +1462,8 @@ async fn drive(
             || matches!(&outcome, Batch::Ended(Exit::NoCode));
         if could_be_limited {
             let probe_now = probe.clone();
-            let reading = tokio::task::spawn_blocking(move || {
-                usage::read(profile?, probe_now.as_deref()?)
-            })
+            let reading = tokio::task::spawn_blocking(move ||
+                usage::read(profile?, probe_now.as_deref()?))
             .await
             .unwrap_or(None);
             if usage::spent(reading.as_ref()) {
@@ -1548,7 +1550,7 @@ async fn drive(
                 let fresh_board = queue::snapshot(
                     &fresh_after,
                     &run.settings.scope,
-                    run.settings.min_priority,
+                    run.settings.min_priority
                 );
                 let final_leftovers = handoff_leftovers(Some(&fresh_after), &actor)
                     .expect("a successful post-quiet board read has a claim set");
@@ -1664,7 +1666,8 @@ async fn drive(
             Batch::AnswerCancelled { .. } => {
                 let proof = handoff_life(handoff_gate(), life, terminal_ack);
                 match cancelled_releasable(&leftovers, proof) {
-                    Some(claims) => release_claims(&tracker, &root, &repos, batch_no, &actor, claims, proof).await,
+                    Some(claims) => { release_claims(&tracker, &root, &repos, batch_no, &actor, claims, proof).await
+                    }
                     None => {
                         account.journal.say(&format!(
                             "batch {batch_no} claims retained: cancelled process group could not be proven stopped; leftovers={}",
@@ -1830,9 +1833,8 @@ async fn drive(
         // crash, and the run would end as `Crashed` after `MAX_CRASHES` with
         // nothing having crashed.
         let probe_now = probe.clone();
-        let reading = tokio::task::spawn_blocking(move || {
-            usage::read(profile?, probe_now.as_deref()?)
-        })
+        let reading = tokio::task::spawn_blocking(move ||
+            usage::read(profile?, probe_now.as_deref()?))
         .await
         .unwrap_or(None);
         if usage::spent(reading.as_ref()) {
@@ -1942,7 +1944,8 @@ fn journal_batch_lines(
     leftovers: &[queue::Leftover],
 ) -> (String, String) {
     let board = match (snapshot, source) {
-        (Some(snapshot), Some(source)) => journal::board(journal::Read::AfterBatch, snapshot, source),
+        (Some(snapshot), Some(source)) => { journal::board(journal::Read::AfterBatch, snapshot, source)
+        }
         _ => journal::unreadable_board(journal::Read::AfterBatch, None),
     };
     let ended = journal::batch_ended(batch, outcome, seconds, reported, leftovers);
@@ -2106,9 +2109,8 @@ async fn finish(
 fn read_batch(dir: &Path, n: u32, seconds: u64, outcome: BatchOutcome) -> BatchLine {
     let parsed = match std::fs::read_to_string(dir.join(format!("batch-{n}.json"))) {
         Ok(text) => report::parse_batch(&text),
-        Err(_) => {
-            report::ParsedBatch { tasks: vec![], notes: None, summary: None, reported_ok: false }
-        }
+        Err(_) =>
+            report::ParsedBatch { tasks: vec![], notes: None, summary: None, reported_ok: false },
     };
     BatchLine {
         n,
@@ -2180,7 +2182,7 @@ fn handoff_permitted(gate: HandoffGate, life: queue::BatchLife, terminal_ack: bo
 fn handoff_life(
     gate: HandoffGate,
     life: queue::BatchLife,
-    terminal_ack: bool,
+    terminal_ack: bool
 ) -> queue::BatchLife {
     handoff_permitted(gate, life, terminal_ack)
         .then_some(queue::BatchLife::ProvenDead)
@@ -2321,7 +2323,8 @@ async fn release_claims(
         // started in every repository the project declares for a sentence
         // nobody is going to write.
         let work = (!left.lock)
-            .then(|| repos.iter().find_map(|repo| crate::git::task_work(&root.join(repo), &left.id)))
+            .then(|| { repos.iter().find_map(|repo| crate::git::task_work(&root.join(repo), &left.id))
+            })
             .flatten();
         let borrowed = work.as_ref().map(|(branch, commit)| (branch.as_str(), commit.as_str()));
         let Some(patch) = queue::release(left, batch, actor, borrowed, life) else { continue };
@@ -3044,6 +3047,7 @@ async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64) -> bool {
 async fn spawn_batch(
     transport: &RunTransport,
     run: &Run,
+    kanban_sync: Option<&crate::tracker::sync::Handle>,
     tasks: Option<u8>,
     agent: &str,
     reports: &Path,
@@ -3051,6 +3055,15 @@ async fn spawn_batch(
     continuation: Option<crate::agents::RunContinuation>,
     remove_worktrees: bool,
 ) -> Result<u64, String> {
+    if let Some(sync) = kanban_sync.filter(|sync| sync.enabled(&run.project)) {
+        if let Err(error) = sync.pull(&run.project).await {
+            log::warn!(
+                "kanban sync before run lead in {}: {}",
+                run.project,
+                error.stderr
+            );
+        }
+    }
     let (tx, rx) = oneshot::channel();
     let settings = RunSettings { max_parallel_tasks: tasks, ..run.settings.clone() };
     // The directory and this batch's number ride with the settings for the same
@@ -3688,7 +3701,7 @@ mod tests {
         let leader_exited_but_member_writes = batch_life_with(
             Some(&group),
             &|_| registry::Seen::Gone,
-            &|_| false,
+            &|_| false
         );
 
         assert_eq!(leader_exited_but_member_writes, queue::BatchLife::Unproven);

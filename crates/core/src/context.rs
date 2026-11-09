@@ -65,6 +65,7 @@ struct Inner {
     resource_dir: Result<PathBuf, String>,
     sidecar: Option<PathBuf>,
     sink: Arc<dyn Sink>,
+    kanban_sync: OnceLock<crate::tracker::sync::Handle>,
 }
 
 impl Context {
@@ -75,7 +76,8 @@ impl Context {
         sidecar: Option<PathBuf>,
         sink: Arc<dyn Sink>,
     ) -> Self {
-        Self { inner: Arc::new(Inner { data_dir, config_dir, resource_dir, sidecar, sink }) }
+        Self { inner: Arc::new(Inner { data_dir, config_dir, resource_dir, sidecar, sink,
+                kanban_sync: OnceLock::new(), }) }
     }
 
     /// A context with no directories, no sidecar and a sink that drops everything: for a test
@@ -112,6 +114,15 @@ impl Context {
     /// The directory the bundled `bd` sits in, which an agent's `PATH` is put in front of.
     pub fn sidecar_dir(&self) -> Option<&Path> {
         self.sidecar().and_then(Path::parent)
+    }
+
+    /// The server's one Kanban sync coordinator, shared by its workers.
+    pub fn install_kanban_sync(&self, handle: crate::tracker::sync::Handle) {
+        let _ = self.inner.kanban_sync.set(handle);
+    }
+
+    pub fn kanban_sync(&self) -> Option<&crate::tracker::sync::Handle> {
+        self.inner.kanban_sync.get()
     }
 
     /// Emits `payload` as `name`. A payload that does not serialize is dropped, as `emit` always did.

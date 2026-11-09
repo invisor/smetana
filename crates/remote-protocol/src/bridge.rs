@@ -298,6 +298,8 @@ pub const SERVER_COMMANDS: &[&str] = &[
     "project_clone",
     "server_file_read",
     "server_work",
+    "kanban_sync_pull",
+    "kanban_sync_state",
 ];
 
 /// The server commands that exist only on the server: the desktop app registers no Tauri command of
@@ -330,6 +332,8 @@ pub const SERVER_ONLY_COMMANDS: &[&str] = &[
     "project_clone",
     "server_file_read",
     "server_work",
+    "kanban_sync_pull",
+    "kanban_sync_state",
 ];
 
 /// Every event a desktop device may listen to: the phone's list (first), then the rest of what
@@ -359,6 +363,7 @@ pub const SERVER_EVENTS: &[&str] = &[
     "remote:pair-ended",
     // Added in protocol 1.9: a restart that was announced is put off because work appeared.
     "server:restart-deferred",
+    "kanban:sync",
 ];
 
 /// Whether a phone may call `cmd`.

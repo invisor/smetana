@@ -44,6 +44,7 @@ import {
   sameAgentTable,
   seedFromGlobal
 } from './projectAgents.js'
+import { syncDraft, syncErrors, sameSync } from './projectKanbanSync.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -74,6 +75,7 @@ const props = defineProps({
      is what lets the window write `settings.project.agents` directly on Save
      rather than resolving a project of its own. */
   agents: { type: Object, default: null },
+  kanbanSync: { type: Object, default: null },
   /* The root's own three fields, read for one purpose only: seeding the
      switch's draft the moment somebody turns it on. Not `effectiveAgents` —
      that would seed a project's own block from itself the moment this dialog
@@ -105,12 +107,14 @@ const draft = ref({ ...props.defaults })
    without touching the prop underneath it. `null` stays `null` — a project
    with no block opens with the switch off. */
 const agentsDraft = ref(props.agents ? seedFromGlobal(props.agents) : null)
+const sync = ref(syncDraft(props.kanbanSync))
 watch(
   () => props.open,
   (open) => {
     if (!open) return
     draft.value = { ...props.defaults }
     agentsDraft.value = props.agents ? seedFromGlobal(props.agents) : null
+    sync.value = syncDraft(props.kanbanSync)
   },
   { immediate: true }
 )
@@ -148,6 +152,13 @@ const errors = computed(() => validateDraft(draft.value))
 const defaultsDirty = computed(() => isDirty(draft.value, props.defaults))
 const defaultsValid = computed(() => Object.keys(errors.value).length === 0)
 const agentsDirty = computed(() => !sameAgentTable(agentsDraft.value, props.agents ?? null))
+const syncDirty = computed(() => !sameSync(sync.value, props.kanbanSync))
+const syncValidation = computed(() => syncErrors(sync.value))
+const syncValid = computed(() => Object.keys(syncValidation.value).length === 0)
+const setSyncMinutes = (raw) => {
+  const text = String(raw).trim()
+  sync.value.pullIntervalMinutes = text === '' ? '' : Number(text)
+}
 
 /* Whether there is a form at all. With no parsed file there is nothing to fill
    in and nothing to save on that half, so the four rows go together with one
@@ -161,12 +172,12 @@ const notice = computed(() => configNotice(props.configState))
 /* One rule for one Save over two files — `projectAgents.js`'s own, so the
    dialog and its tests read the identical rule. */
 const canSave = computed(() =>
-  canSaveProject({
+  syncValid.value && canSaveProject({
     busy: props.busy,
     fields: fields.value,
     defaultsDirty: defaultsDirty.value,
     defaultsValid: defaultsValid.value,
-    agentsDirty: agentsDirty.value
+    agentsDirty: agentsDirty.value || syncDirty.value
   })
 )
 /* `defaults` on the payload is `null` when the file was never parsed or the
@@ -175,7 +186,8 @@ const canSave = computed(() =>
    store's own field is what a `null` there means. */
 const savePayload = computed(() => ({
   defaults: fields.value && defaultsDirty.value ? draft.value : null,
-  agents: agentsDraft.value
+  agents: agentsDraft.value,
+  kanbanSync: { ...sync.value }
 }))
 
 /* Off the stored value rather than off the draft: what this keeps in the list
@@ -386,6 +398,45 @@ const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted
       </div>
 
       <span v-if="error" :style="errorStyle">{{ error }}</span>
+
+      <section aria-label="Kanban synchronization">
+        <div :style="agentSectionStyle">
+          <span :style="agentHeadingStyle">Kanban synchronization</span>
+          <span :style="agentRuleStyle" />
+        </div>
+        <div :style="ownAgentsStyle">
+          <div>
+            <div :style="ownAgentsLabelStyle">Sync tasks through Dolt</div>
+            <p :style="ownAgentsDescriptionStyle">Run project commands to receive and send Kanban changes.</p>
+          </div>
+          <div :style="switchStyle">
+            <Switch :model-value="sync.enabled" :disabled="busy" @update:model-value="sync.enabled = $event" />
+          </div>
+        </div>
+        <template v-if="sync.enabled">
+          <div :style="fieldRowStyle">
+            <span :style="fieldLabelStyle">Pull command</span>
+            <div :style="fieldControlStyle">
+              <Input :style="controlStyle" mono :model-value="sync.pullCommand" :invalid="Boolean(syncValidation.pullCommand)" :disabled="busy" @update:model-value="sync.pullCommand = $event" />
+              <span v-if="syncValidation.pullCommand" :style="errorStyle">{{ syncValidation.pullCommand }}</span>
+            </div>
+          </div>
+          <div :style="fieldRowStyle">
+            <span :style="fieldLabelStyle">Push command</span>
+            <div :style="fieldControlStyle">
+              <Input :style="controlStyle" mono :model-value="sync.pushCommand" :invalid="Boolean(syncValidation.pushCommand)" :disabled="busy" @update:model-value="sync.pushCommand = $event" />
+              <span v-if="syncValidation.pushCommand" :style="errorStyle">{{ syncValidation.pushCommand }}</span>
+            </div>
+          </div>
+          <div :style="fieldRowStyle">
+            <span :style="fieldLabelStyle">Pull interval (minutes)</span>
+            <div :style="fieldControlStyle">
+              <Input :style="controlStyle" type="number" mono :model-value="sync.pullIntervalMinutes" :invalid="Boolean(syncValidation.pullIntervalMinutes)" :disabled="busy" @update:model-value="setSyncMinutes($event)" />
+              <span v-if="syncValidation.pullIntervalMinutes" :style="errorStyle">{{ syncValidation.pullIntervalMinutes }}</span>
+            </div>
+          </div>
+        </template>
+      </section>
 
       <!-- The second file, and drawn whatever state the first one is in:
            which harness and models this project uses is a fact about this

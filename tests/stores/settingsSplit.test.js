@@ -15,6 +15,15 @@ import { defaults } from '../../src/stores/settings.js'
 const store = (over = {}) => ({ ...defaults(), openProjects: ['/a', '/b'], activeProject: '/a', ...over })
 
 describe('the server view', () => {
+  it('keeps Kanban sync per project when the active project changes', () => {
+    const a = store()
+    a.project.kanbanSync.enabled = true
+    const savedA = serverView(a)
+    const b = store({ activeProject: '/b' })
+    const savedB = serverView(b)
+    expect(savedA.projects['/a'].kanbanSync.enabled).toBe(true)
+    expect(savedB.projects['/b'].kanbanSync.enabled).toBe(false)
+  })
   it('holds the fields a worker on the server reads and none of the device', () => {
     const view = serverView(store())
     expect(Object.keys(view).sort()).toEqual(
@@ -25,7 +34,7 @@ describe('the server view', () => {
       ].sort()
     )
     expect(view.git).toEqual({ removeWorktrees: true })
-    expect(view.projects).toEqual({ '/a': { runSettings: null, agents: null, columnOrder: [] } })
+    expect(view.projects).toEqual({ '/a': { runSettings: null, agents: null, columnOrder: [], kanbanSync: store().project.kanbanSync } })
     expect(view.appearance).toEqual({ theme: 'dark', density: 'comfortable' })
     expect(JSON.stringify(view)).not.toContain('uiFontSize')
     expect(view.kanban).toEqual(store().kanban)
@@ -192,7 +201,7 @@ describe('a broadcast half', () => {
     expect(view.subscription).toEqual({ pauseAt: 70, reducedAt: 75 })
     expect(view.agentPrompt).toBe('')
     expect(view.openProjects).toEqual(['/a'])
-    expect(view.projects).toEqual({ '/a': { runSettings: { mode: 'solo' }, agents: null, columnOrder: null } })
+    expect(view.projects).toEqual({ '/a': { runSettings: { mode: 'solo' }, agents: null, columnOrder: null, kanbanSync: null } })
   })
 
   it('carries the look and the column order, and not the font size', () => {
