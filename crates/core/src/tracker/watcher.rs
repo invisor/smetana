@@ -3,7 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc::Sender;
 
 /// There are exactly three paths that matter. Everything else in .beads —
@@ -78,10 +78,24 @@ fn witness(path: &Path) -> PathBuf {
 /// The decision of the watcher callback: does this event mean an outside
 /// change? Every relevant path's witness is fingerprinted (no short-circuit),
 /// so each baseline stays current.
-pub fn should_wake(seen: &mut Fingerprints, paths: &[PathBuf]) -> bool {
+///
+/// An access event (`EventKind::Access(_)`: open, close after read, close
+/// after write) never wakes the worker and never reads a file. notify 8
+/// registers `IN_OPEN` on every inotify watch, and fingerprinting is itself
+/// an `open()` of the very file the event named, so without this filter
+/// every read raised the next event: one thread at 100 % CPU and about
+/// 160 000 reads of `manifest` a second, with nothing written and nothing
+/// ever reaching the worker, since the bytes never moved (smetana-8w1e).
+/// Nothing is lost by dropping them: a real write to these files also raises
+/// a Modify, Create or Remove event, since bd writes `manifest` in place or
+/// by rename.
+pub fn should_wake(seen: &mut Fingerprints, event: &Event) -> bool {
+    if matches!(event.kind, EventKind::Access(_)) {
+        return false;
+    }
     let mut wake = false;
     let mut done: Vec<PathBuf> = Vec::new();
-    for p in paths.iter().filter(|p| is_relevant(p)) {
+    for p in event.paths.iter().filter(|p| is_relevant(p)) {
         let w = witness(p);
         if done.contains(&w) {
             continue;
@@ -117,11 +131,10 @@ pub enum WatchEvent {
 pub fn spawn(beads_dir: PathBuf, tx: Sender<WatchEvent>) -> notify::Result<RecommendedWatcher> {
     let mut seen = Fingerprints::default();
     seed_baseline(&mut seen, &beads_dir);
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         match res {
             Ok(event) => {
-                let changed = should_wake(&mut seen, &event.paths);
-                if changed {
+                if should_wake(&mut seen, &event) {
                     // The worker collapses frequent events; all that matters
                     // here is not to block when the queue is already full.
                     let _ = tx.try_send(WatchEvent::Changed);
@@ -143,6 +156,7 @@ pub fn spawn(beads_dir: PathBuf, tx: Sender<WatchEvent>) -> notify::Result<Recom
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::event::{AccessKind, AccessMode, CreateKind, DataChange, ModifyKind};
     use std::path::Path;
 
     #[test]
@@ -213,12 +227,12 @@ mod tests {
 
         let mut seen = Fingerprints::default();
         seed_baseline(&mut seen, dir.path());
-        let both = vec![manifest.clone(), touched.clone()];
+        let both = modified(&[manifest.clone(), touched.clone()]);
         // Our own read: files rewritten with the same bytes.
         std::fs::write(&manifest, "m1").unwrap();
         std::fs::write(&journal, "big").unwrap();
         assert!(!should_wake(&mut seen, &both));
-        assert!(!should_wake(&mut seen, &[journal.clone()]));
+        assert!(!should_wake(&mut seen, &modified(&[journal.clone()])));
         // An outside write: both baselines move in one event.
         std::fs::write(&manifest, "m2").unwrap();
         std::fs::write(&touched, "t2").unwrap();
@@ -226,9 +240,67 @@ mod tests {
         assert!(!should_wake(&mut seen, &both));
         // journal.idx alone is answered by the manifest.
         std::fs::write(&manifest, "m3").unwrap();
-        assert!(should_wake(&mut seen, &[journal]));
+        assert!(should_wake(&mut seen, &modified(&[journal])));
         // Noise never wakes.
-        assert!(!should_wake(&mut seen, &[dir.path().join("config.yaml")]));
+        assert!(!should_wake(&mut seen, &modified(&[dir.path().join("config.yaml")])));
+    }
+
+    fn event(kind: EventKind, paths: &[PathBuf]) -> Event {
+        paths.iter().fold(Event::new(kind), |e, p| e.add_path(p.clone()))
+    }
+
+    fn modified(paths: &[PathBuf]) -> Event {
+        event(EventKind::Modify(ModifyKind::Data(DataChange::Content)), paths)
+    }
+
+    #[test]
+    fn an_access_event_never_wakes_and_never_reads() {
+        // The manifest does not exist: reading it would count as a change
+        // (an unreadable file is never trusted), so `false` here proves the
+        // file was not read at all.
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("embeddeddolt/t/.dolt/noms/manifest");
+        let journal = manifest.with_file_name("journal.idx");
+        let touched = dir.path().join("last-touched");
+        let paths = vec![manifest.clone(), journal, touched];
+        let mut seen = Fingerprints::default();
+        for kind in [
+            EventKind::Access(AccessKind::Open(AccessMode::Any)),
+            EventKind::Access(AccessKind::Close(AccessMode::Read)),
+            EventKind::Access(AccessKind::Close(AccessMode::Write)),
+            EventKind::Access(AccessKind::Read),
+            EventKind::Access(AccessKind::Any),
+        ] {
+            assert!(!should_wake(&mut seen, &event(kind, &paths)), "{kind:?}");
+        }
+        assert!(seen.seen.is_empty(), "an access event fingerprinted a file");
+        // The same input as a modification is read, and wakes.
+        assert!(should_wake(&mut seen, &modified(&[manifest])));
+    }
+
+    #[test]
+    fn a_write_still_wakes_whatever_its_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let noms = dir.path().join("embeddeddolt/t/.dolt/noms");
+        std::fs::create_dir_all(&noms).unwrap();
+        let manifest = noms.join("manifest");
+        std::fs::write(&manifest, "m1").unwrap();
+        let mut seen = Fingerprints::default();
+        seed_baseline(&mut seen, dir.path());
+        let paths = [manifest.clone()];
+        let open = EventKind::Access(AccessKind::Open(AccessMode::Any));
+
+        // Modified in place.
+        std::fs::write(&manifest, "m2").unwrap();
+        assert!(!should_wake(&mut seen, &event(open, &paths)));
+        assert!(should_wake(&mut seen, &modified(&paths)));
+        // Replaced by a rename, which inotify reports as a create.
+        std::fs::write(&manifest, "m3").unwrap();
+        assert!(should_wake(&mut seen, &event(EventKind::Create(CreateKind::File), &paths)));
+        // Rewritten with the same bytes: still not a change.
+        std::fs::write(&manifest, "m3").unwrap();
+        assert!(!should_wake(&mut seen, &modified(&paths)));
+        assert!(!should_wake(&mut seen, &event(EventKind::Create(CreateKind::File), &paths)));
     }
 
     #[test]
