@@ -422,7 +422,13 @@ const defaults = () => ({
        belonging to the previous project would go on describing the next one.
        `.claude/rules/settings.md` carries the whole of what a present block
        means and how it is resolved; this file only stores it. */
-    agents: null
+    agents: null,
+    kanbanSync: {
+      enabled: false,
+      pullCommand: 'bd dolt pull',
+      pushCommand: 'bd dolt push',
+      pullIntervalMinutes: 5
+    }
   }
 })
 

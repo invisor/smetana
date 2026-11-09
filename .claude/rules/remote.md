@@ -704,3 +704,7 @@ so a stop pressed with nothing in flight is not announced to one's own phone. De
 best effort, with no retry or queue; a failure is one log line naming the device and never the token.
 `reqwest` is the updater's build of it (`rustls-no-provider`), so `push::client` installs the ring
 provider itself in case no update check has run yet.
+
+## Kanban sync protocol
+
+Protocol 1.18 adds desktop-only `kanban_sync_pull` and `kanban_sync_state`, plus `kanban:sync` events. Protocol 1.19 adds desktop-only `kanban_sync_presence`; the server keys each project list by the bridge caller id. The bridge registers desktop clients before their first command and removes them in `client_gone`; late calls for removed ids are ignored. With no desktop clients, the saved project list supplies headless fallback. Protocol 1.20 adds a monotonic `revision` to each presence update, so a delayed call cannot restore an older list. The state carries the canonical project path and independent pull/push errors (operation, exit code, timeout, bounded stderr). A client reads current state when connecting and receives events for later changes. Keep remote-server dispatch, client read classification, contract samples, and `versions.json` in step when changing these messages.

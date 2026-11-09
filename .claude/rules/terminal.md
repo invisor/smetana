@@ -1769,3 +1769,7 @@ the project's other specs). Visual source: variant 1a of the agent log handoff.
   the longest board id prefixing the folder name, `/tmp`, app bundle, other) and `batchTimeline.js` (folding a result
   into its call by id, `live` only while the session has not exited, day rows, labels and tones). Only Bash rows carry
   a scope tag, since only Bash has a `cwd`.
+
+## Kanban sync before agent creation
+
+A user-created agent terminal waits for `kanban_sync_pull` through the server coordinator before spawning the process. The 120-second queue-and-pull wait reports an addressed error and still launches the requested agent once. Sign-in, ordinary shells, attachment, and messages to a live terminal do not pull. The request retains its original project path while the active UI project may change.

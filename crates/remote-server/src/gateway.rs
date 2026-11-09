@@ -82,7 +82,7 @@ pub fn deferred_payload(work: &[LiveWork]) -> serde_json::Value {
 /// it pairs with the `calls!` table in `dispatch.rs`, and a command that starts work and is not listed
 /// is one the freeze lets through, to be ended unlisted. While a restart is committed the host refuses them, so that nothing
 /// can begin between the last look at the list and the end of the workers.
-pub const WORK_COMMANDS: &[&str] = &["terminal_create", "terminal_shell", "session_start", "run_start"];
+pub const WORK_COMMANDS: &[&str] = &["terminal_create", "terminal_shell", "session_start", "run_start", "kanban_sync_pull", "kanban_sync_presence"];
 
 /// When the person wants the restart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

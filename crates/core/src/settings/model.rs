@@ -1095,6 +1095,100 @@ pub struct ProjectState {
     /// exactly why the leniency matters most here.
     #[serde(deserialize_with = "lenient_agents")]
     pub agents: Option<ProjectAgents>,
+    /// Server-side task synchronization policy for this project.
+    #[serde(deserialize_with = "lenient_kanban_sync")]
+    pub kanban_sync: KanbanSync,
+}
+
+fn lenient_kanban_sync<'de, D>(deserializer: D) -> Result<KanbanSync, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match serde_json::from_value::<KanbanSync>(value.clone()) {
+        Ok(config) => Ok(config),
+        Err(error) => {
+            log::warn!("invalid saved Kanban sync settings; synchronization disabled: {error}");
+            let mut config = KanbanSync::default();
+            if value.get("enabled").and_then(Value::as_bool) == Some(true) {
+                // Retain the person's opt-in but make the block unexecutable.
+                // The coordinator can then expose the validation error to a
+                // client that connects after this file was loaded.
+                config.enabled = true;
+                config.pull_interval_minutes = 0;
+            }
+            Ok(config)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct KanbanSync {
+    pub enabled: bool,
+    pub pull_command: String,
+    pub push_command: String,
+    pub pull_interval_minutes: u32,
+}
+
+#[cfg(test)]
+mod kanban_sync_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_and_validation() {
+        let mut sync = KanbanSync::default();
+        assert!(!sync.enabled);
+        assert_eq!(sync.pull_command, "bd dolt pull");
+        assert_eq!(sync.push_command, "bd dolt push");
+        assert_eq!(sync.pull_interval_minutes, 5);
+        sync.enabled = true;
+        assert!(sync.check().is_ok());
+        sync.pull_command.clear();
+        assert!(sync.check().is_err());
+        sync.enabled = false;
+        assert!(sync.check().is_ok());
+    }
+
+    #[test]
+    fn damaged_sync_block_does_not_drop_the_project_or_enable_commands() {
+        let Outcome::Ok(settings) = parse(
+            r#"{"version":1,"projects":{"/p":{"activeTab":"terminal",
+            "kanbanSync":{"enabled":true,"pullCommand":"bd dolt pull","pushCommand":"bd dolt push",
+            "pullIntervalMinutes":"bad"}}}}"#,
+        ) else {
+            panic!("settings parse failed")
+        };
+        assert_eq!(settings.projects["/p"].active_tab, "terminal");
+        assert!(settings.projects["/p"].kanban_sync.enabled);
+        assert!(settings.projects["/p"].kanban_sync.check().is_err());
+    }
+}
+
+impl Default for KanbanSync {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            pull_command: "bd dolt pull".into(),
+            push_command: "bd dolt push".into(),
+            pull_interval_minutes: 5,
+        }
+    }
+}
+
+impl KanbanSync {
+    pub fn check(&self) -> Result<(), &'static str> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.pull_command.trim().is_empty() || self.push_command.trim().is_empty() {
+            return Err("enabled Kanban sync requires pull and push commands");
+        }
+        if !(1..=1440).contains(&self.pull_interval_minutes) {
+            return Err("Kanban sync interval must be between 1 and 1440 minutes");
+        }
+        Ok(())
+    }
 }
 
 /// `agents` read the way `section` reads a root section, one field over: a
@@ -1143,6 +1237,7 @@ impl Default for ProjectState {
             storage_warned_mib: None,
             used_at: None,
             agents: None,
+            kanban_sync: KanbanSync::default(),
         }
     }
 }
@@ -2509,7 +2604,7 @@ mod tests {
     #[test]
     fn both_ends_of_the_range_are_legal_sizes() {
         let settings = settings_of(
-            r#"{"version":1,"appearance":{"uiFontSize":10},"editor":{"fontSize":24}}"#,
+            r#"{"version":1,"appearance":{"uiFontSize":10},"editor":{"fontSize":24}}"#
         );
         assert_eq!(settings.appearance.ui_font_size, 10);
         assert_eq!(settings.editor.font_size, 24);
@@ -2522,7 +2617,7 @@ mod tests {
     #[test]
     fn the_font_sizes_survive_disk_to_front_end_and_back() {
         let file = settings_of(
-            r#"{"version":1,"appearance":{"uiFontSize":16},"editor":{"fontSize":18}}"#,
+            r#"{"version":1,"appearance":{"uiFontSize":16},"editor":{"fontSize":18}}"#
         );
         assert_eq!(file.appearance.ui_font_size, 16, "parse must read them off the disk");
         assert_eq!(file.editor.font_size, 18);

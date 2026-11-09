@@ -24,7 +24,7 @@ describe('the Project settings defaults column', () => {
     const labels = ['Target branch', 'Minimum priority', 'Max parallel tasks', 'Review passes']
     for (const [index, label] of labels.entries()) {
       const start = source.indexOf(label)
-      const end = index + 1 < labels.length ? source.indexOf(labels[index + 1], start) : source.indexOf('</template>', start)
+      const end = index + 1 < labels.length ? source.indexOf(labels[index + 1], start) : source.indexOf('</div>\n\n      <span v-if="error"', start)
       const row = source.slice(start, end)
 
       // One application sizes the wrapper; the other reaches Select's

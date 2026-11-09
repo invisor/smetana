@@ -7,8 +7,8 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use base64::Engine;
 use crate::context::Context;
+use base64::Engine;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -155,7 +155,13 @@ pub enum Request {
     ///
     /// Either way it is what was *asked for* and not necessarily what runs:
     /// see the `Create` arm and `agents::pick`.
-    Create(String, Option<String>, Intent, oneshot::Sender<Result<Session, TerminalError>>),
+    Create(String, Option<String>, Intent, oneshot::Sender<Result<Session, TerminalError>>,
+    ),
+    CreateReady(
+        String,
+        Option<String>,
+        Intent,
+        oneshot::Sender<Result<Session, TerminalError>>,),
     /// The project to open a shell in, and where inside it to start — a shell
     /// takes no agent and no intent, because there is nothing this app is asking
     /// it to do. The second field is a path relative to the project's root, or
@@ -360,6 +366,7 @@ pub fn start(ctx: Context, known_projects: Vec<PathBuf>, coalition_sweep: crate:
     crate::runs::procs::force_own_dedicated_coalition();
 
     let (tx, mut rx) = mpsc::channel::<Request>(32);
+    let ready_queue = tx.clone();
     let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel::<Chunk>();
     // A way back into this worker for the one answer that arrives after the
     // request it belongs to has been replied to: the id a harness gave itself.
@@ -426,7 +433,7 @@ pub fn start(ctx: Context, known_projects: Vec<PathBuf>, coalition_sweep: crate:
             tokio::select! {
                 request = rx.recv() => {
                     // The senders are gone — there is nobody left to work for.
-                    let Some(request) = request else { break };
+                    let Some(mut request) = request else { break };
                     // Shutting down is the one request that cannot be served
                     // inside `handle`: killing gracefully means waiting, and
                     // waiting means `.await`. The reply goes back only once
@@ -439,6 +446,22 @@ pub fn start(ctx: Context, known_projects: Vec<PathBuf>, coalition_sweep: crate:
                         kill_all(&mut sessions).await;
                         let _ = tx.send(());
                         return;
+                    }
+                    match request {
+                        Request::Create(project, None, intent, reply)
+                            if !matches!(intent, agents::Intent::SignIn { .. })
+                                && ctx.kanban_sync().is_some_and(|sync| sync.enabled(&project)) => {
+                                let sync = ctx.kanban_sync().unwrap().clone();
+                                let queue = ready_queue.clone();
+                                crate::context::spawn(async move {
+                                    if let Err(error) = sync.pull(&project).await {
+                                        log::warn!("kanban sync before agent launch in {project}: {}", error.stderr);
+                                    }
+                                    let _ = queue.send(Request::CreateReady(project, None, intent, reply)).await;
+                                });
+                                continue;
+                            }
+                        other => request = other,
                     }
                     handle(&ctx, &mut sessions, &mut captures, &mut exit_waiters, &mut active, &mut next_id, &chunks_tx, &requests, request);
                 }
@@ -781,8 +804,9 @@ pub(crate) fn conversation_for(
     match intent {
         Intent::ResumeSession { id, fork: false, .. } => Some(id.clone()),
         Intent::ResumeSession { .. } => None,
-        _ if records_a_restorable(intent) => super::conversation::new_id()
-            .filter(|id| profile.session_id_args(id).is_some()),
+        _ if records_a_restorable(intent) => { super::conversation::new_id()
+            .filter(|id| profile.session_id_args(id).is_some())
+        }
         _ => None,
     }
 }
@@ -1161,7 +1185,8 @@ fn reassess(ctx: &Context, sessions: &mut HashMap<SessionId, Live>) {
         let before = (live.session.state, live.session.question.clone());
         live.session.apply(out.state, out.question);
         let permission = live.session.question.as_ref()
-            .filter(|question| live.profile.is_some_and(|profile| profile.id() == "codex") && codex_permission(question))
+            .filter(|question| { live.profile.is_some_and(|profile| profile.id() == "codex") && codex_permission(question)
+            })
             .map(permission_signature);
         if permission != live.permission_question {
             live.permission_generation = live.permission_generation.wrapping_add(1);
@@ -1190,7 +1215,8 @@ fn announce_wait(before: SessionState, after: SessionState, notify: impl FnOnce(
     // `waiting_began` is written against the conversation session's state enum; only the wait itself
     // matters to it, so a terminal state is carried over as waiting or as not waiting.
     use crate::session::model::SessionState as Wire;
-    let wire = |state| if state == SessionState::NeedsYou { Wire::NeedsYou } else { Wire::Running };
+    let wire = |state| { if state == SessionState::NeedsYou { Wire::NeedsYou } else { Wire::Running
+        } };
     if crate::remote::push::waiting_began(wire(before), wire(after)) {
         notify();
     }
@@ -1380,7 +1406,8 @@ fn peek(
     let Some(live) = sessions.get(&id) else {
         return Err(TerminalError::NoSession(id));
     };
-    let resumed = after.and_then(|after| live.out.history.after(after, live.seq).map(|bytes| (after, bytes)));
+    let resumed = after.and_then(|after| { live.out.history.after(after, live.seq).map(|bytes| (after, bytes))
+    });
     let (data, resumed_after) = match resumed {
         Some((after, bytes)) => (bytes, Some(after)),
         None => (live.ring.snapshot_without_tail(live.pending.len()), None),
@@ -1437,7 +1464,8 @@ fn handle(
             list.sort_by_key(|m| m.id);
             let _ = tx.send(list);
         }
-        Request::Create(project, pinned, intent, tx) => {
+        Request::Create(project, pinned, intent, tx)
+        | Request::CreateReady(project, pinned, intent, tx) => {
             // The one resolver, read here for the reason the languages below
             // are read here: this is the single place every session in the app
             // is built, so a person's session and a run's batch cannot come to
@@ -1858,7 +1886,8 @@ fn handle(
             });
         }
         Request::Remove(id, expected, tx) => {
-            if expected.is_some_and(|generation| !sessions.get(&id).is_some_and(|live| permission_can_cancel(live, generation))) {
+            if expected.is_some_and(|generation| { !sessions.get(&id).is_some_and(|live| permission_can_cancel(live, generation))
+            }) {
                 let _ = tx.send(None);
                 return;
             }
@@ -2070,7 +2099,8 @@ fn handle(
         Request::HandoffReady(id, tx) => {
             let ready = sessions
                 .get(&id)
-                .is_some_and(|live| live.session.state == SessionState::Exited && live.handoff_ready);
+                .is_some_and(|live| { live.session.state == SessionState::Exited && live.handoff_ready
+            });
             let _ = tx.send(ready);
         }
         // Handled by the loop, which is the only place that can await the

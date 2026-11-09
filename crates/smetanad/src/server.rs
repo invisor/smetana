@@ -180,6 +180,7 @@ pub struct Server {
     pub addr: iroh::EndpointAddr,
     terminal: TerminalHandle,
     sessions: SessionHandle,
+    _kanban_sync: Arc<tracker::sync::Coordinator>,
     restart: Arc<Notify>,
     /// The gateway asked for the server to end (`server_restart` with `stop-when-idle`).
     stop: Arc<Notify>,
@@ -401,6 +402,7 @@ impl Server {
             .collect();
 
         let tracker = tracker::service::start(ctx.clone(), initial);
+        let kanban_sync = tracker::sync::start(ctx.clone(), tracker.clone());
         let terminal = terminal::service::start(ctx.clone(), known.clone(), COALITION_SWEEP);
         let sessions = session::service::start(ctx.clone());
         let runs = runs::service::start(ctx.clone(), tracker.clone(), terminal.clone(), sessions.clone(), known);
@@ -480,7 +482,7 @@ impl Server {
             }
         }
         log::info!("serving {} as {}", data_dir.display(), remote.public_key());
-        Ok(Server { remote, gateway, data_dir, addr, terminal, sessions, restart, stop, _lock: lock })
+        Ok(Server { remote, gateway, data_dir, addr, terminal, sessions, _kanban_sync: kanban_sync, restart, stop, _lock: lock })
     }
 
     /// Resolves when the operator stops the server or the gateway restarts it.

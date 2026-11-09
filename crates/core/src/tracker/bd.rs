@@ -195,9 +195,13 @@ impl Bd {
         let program = self
             .ctx
             .sidecar()
-            .ok_or_else(|| TrackerError::Spawn("the bundled bd has no known location".to_owned()))?;
+            .ok_or_else(|| { TrackerError::Spawn("the bundled bd has no known location".to_owned())
+        })?;
         let mut child = tokio::process::Command::new(program);
         child.current_dir(&self.cwd).args(args);
+        if self.cwd.join(".beads").is_dir() {
+            child.env("BEADS_DIR", self.cwd.join(".beads"));
+        }
         // The shell plugin this used to go through starts the sidecar with no console window on
         // Windows; a console flashing up for every one of the worker's calls would be the first
         // thing a person on that platform noticed.

@@ -336,3 +336,9 @@ beside the project's name, where there is room for a glyph and a sentence; they
 are drawn for the selected project only. The one of them that is true of an
 unselected project — no bd tracker — is the tooltip's fourth segment, which is
 why `projectRows` carries `tracked` for every row and not just the active one.
+
+## Kanban Dolt synchronization
+
+`tracker/sync` is one server-owned coordinator, keyed by canonical tracker root. It watches every open enabled project and does a local full sweep every 60 seconds. First local task change opens a fixed 60-second push window; later writes do not move its deadline. Each project serializes push and pull, coalesces concurrent pull requests, and retains a failed push for retry after 60 seconds. A due push precedes pull. Closing or disabling cancels queued work and timers. Modern desktop clients report their open projects with a per-connection revision; their reported lists are authoritative when no older desktop is connected. The saved server list remains the fallback for older clients and headless operation. A desktop disconnect removes its own presence. Reconciliation is serialized so an older snapshot cannot replace a newer one. Explicit agent pulls may run for a closed project without starting a watcher.
+
+Before pull, the coordinator captures `.beads/last-touched` and scans pending local changes. It refreshes the baseline after pull, so delayed file events do not echo imported tasks to push. The scan lock is released before asking the tracker worker to resync, because that worker may be waiting to report its own write through the same scanner. A marker change during the whole scan/pull interval conservatively preserves a local batch, including an external CLI write. Sync failure is a project-addressed `kanban:sync` state, separate from board health.

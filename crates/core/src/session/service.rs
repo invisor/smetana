@@ -35,18 +35,18 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use portable_pty::CommandBuilder;
 use crate::context::Context;
+use portable_pty::CommandBuilder;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot};
 
-use super::driver::{Driver, Input, LineBuffer};
 use super::crew::{CrewNode, CrewPackage, CrewState};
+use super::driver::{Driver, Input, LineBuffer};
 use super::journal::Journal;
 use super::model::{
-    is_open_question, state_of, Decision, Event, EventKind, SessionError, SessionId, SessionState,
-    Removed, SessionRecord, StateChange,
+    is_open_question, state_of, Decision, Event, EventKind, Removed, SessionError, SessionId,
+    SessionRecord, SessionState, StateChange,
 };
 use super::permission::{Asked, PermissionServer};
 use crate::agents::claude_driver::ClaudeDriver;
@@ -299,7 +299,12 @@ pub enum Request {
     /// Every live Crew tree, for `crew_list`: what a client that connected mid-run missed of
     /// `crew:tree` (smetana-u0c9).
     CrewList(oneshot::Sender<Vec<CrewTreeChange>>),
-    Start(String, Intent, oneshot::Sender<Result<SessionId, SessionError>>),
+    Start(String, Intent, oneshot::Sender<Result<SessionId, SessionError>>,
+    ),
+    StartReady(
+        String,
+        Intent,
+        oneshot::Sender<Result<SessionId, SessionError>>,),
     /// Start a driven lead and register its Smetana-owned root in one worker
     /// pass. It intentionally bypasses `Request::Start`'s ordinary Run
     /// refusal: a Crew Run is not a normal conversation, but its Codex
@@ -505,6 +510,7 @@ struct CrewSendWaiter {
 
 pub fn start(ctx: Context) -> SessionHandle {
     let (tx, mut rx) = mpsc::channel::<Request>(32);
+    let ready_queue = tx.clone();
     let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel::<Chunk>();
 
     crate::context::spawn(async move {
@@ -577,7 +583,7 @@ pub fn start(ctx: Context) -> SessionHandle {
             tokio::select! {
                 request = rx.recv() => {
                     // The senders are gone — there is nobody left to work for.
-                    let Some(request) = request else { break };
+                    let Some(mut request) = request else { break };
                     if let Request::ShutDown(tx) = request {
                         kill_all(&mut sessions);
                         for pty in crew_ptys.values_mut() {
@@ -585,6 +591,22 @@ pub fn start(ctx: Context) -> SessionHandle {
                         }
                         let _ = tx.send(());
                         return;
+                    }
+                    if let Some(sync) = ctx.kanban_sync() {
+                        match request {
+                            Request::Start(project, intent, reply) if drivable(&intent) && sync.enabled(&project) => {
+                                let sync = sync.clone();
+                                let queue = ready_queue.clone();
+                                crate::context::spawn(async move {
+                                    if let Err(error) = sync.pull(&project).await {
+                                        log::warn!("kanban sync before agent launch in {project}: {}", error.stderr);
+                                    }
+                                    let _ = queue.send(Request::StartReady(project, intent, reply)).await;
+                                });
+                                continue;
+                            }
+                            other => { request = other; }
+                        }
                     }
                     handle(
                         &ctx,
@@ -889,9 +911,8 @@ fn spawn_claude_crew(
 /// drawing a second caption from it.
 fn resume_title(intent: &Intent, project: &Path) -> Option<String> {
     match intent {
-        Intent::ResumeSession { id, title, fork: false, .. } => {
-            title.clone().or_else(|| crate::terminal::restore::existing_title(project, id))
-        }
+        Intent::ResumeSession { id, title, fork: false, .. } =>
+            title.clone().or_else(|| crate::terminal::restore::existing_title(project, id)),
         _ => None,
     }
 }
@@ -980,7 +1001,8 @@ fn spawn_session(
     // this function, and `.claude/rules/conversation-panel.md`'s account of
     // the two roads.
     let past = match &intent {
-        Intent::ResumeSession { id, .. } if profile.id() == "claude" => super::history::read(&cwd, id),
+        Intent::ResumeSession { id, .. } if profile.id() == "claude" => { super::history::read(&cwd, id)
+        }
         _ => Vec::new(),
     };
     // Taken before the `Launch` moves the intent, and spent after the spawn has
@@ -1670,7 +1692,8 @@ fn refresh_claude_crews(
         // again, so a lead left idle is not re-read on every tick.
         if let Some(brief) = sent_briefs.get_mut(root).filter(|brief| !brief.submitted) {
             let submitted = crate::agents::claude_crew::lead_transcript(&home, expected_session)
-                .is_some_and(|transcript| crate::agents::claude_crew::brief_in_transcript(&transcript, &brief.text, brief.from));
+                .is_some_and(|transcript| { crate::agents::claude_crew::brief_in_transcript(&transcript, &brief.text, brief.from)
+                });
             // Anything of ours that reached the transcript but does not match
             // what was typed (the TUI wrapped or cut it) also ends the retry:
             // nobody but Smetana types into this PTY, so a new human record
@@ -1678,7 +1701,8 @@ fn refresh_claude_crews(
             let mismatch = (!submitted)
                 .then(|| crate::agents::claude_crew::lead_transcript(&home, expected_session))
                 .flatten()
-                .and_then(|transcript| crate::agents::claude_crew::human_record_after(&transcript, brief.from));
+                .and_then(|transcript| { crate::agents::claude_crew::human_record_after(&transcript, brief.from)
+                });
             if submitted {
                 brief.submitted = true;
             } else if let Some(found) = mismatch {
@@ -1790,7 +1814,7 @@ fn refresh_claude_crews(
             if let Err(error) = crate::agents::claude_crew::preflight(
                 "2.1.281",
                 &team,
-                lead_session_dir,
+                lead_session_dir
             ) {
                 package.tree.fail_node(*root);
                 log::warn!("[crew] root {root}: Claude runtime preflight failed: {error}");
@@ -1935,7 +1959,8 @@ fn refresh_claude_crews(
                     // source and needs no user hook; the SubagentStart hook
                     // record is the fallback for a file without one.
                     let identity = crate::agents::claude_crew::team_name(&config)
-                        .and_then(|team| crate::agents::claude_crew::subagent_meta_from_file(&path, &team))
+                        .and_then(|team| { crate::agents::claude_crew::subagent_meta_from_file(&path, &team)
+                        })
                         .or_else(|| {
                             crate::agents::claude_crew::subagent_start_from_file(&path)
                                 .ok()
@@ -2154,7 +2179,8 @@ fn handle(
                         // `claude_crew::stage_brief` for why it cannot be
                         // typed itself.
                         let prompt = match prompt
-                            .map(|brief| crate::agents::claude_crew::stage_brief(Path::new(&project), &lead_session, &brief))
+                            .map(|brief| { crate::agents::claude_crew::stage_brief(Path::new(&project), &lead_session, &brief)
+                            })
                             .transpose()
                         {
                             Ok(prompt) => prompt,
@@ -2244,12 +2270,13 @@ fn handle(
         Request::CrewAttach(root, node, tx) => {
             let answer = crews
                 .get(&root)
-                .and_then(|package| package.snapshot(node).map(|(events, seq, state)| CrewAttached {
+                .and_then(|package| { package.snapshot(node).map(|(events, seq, state)| CrewAttached {
                     events,
                     seq,
                     state,
                     cwd: package.project.clone(),
-                }))
+                })
+                })
                 .ok_or(SessionError::NoSuchSession(node));
             let _ = tx.send(answer);
         }
@@ -2292,7 +2319,8 @@ fn handle(
                         crate::agents::claude_crew::Delivery::Staged => {
                             match claude_expected_sessions.get(&root) {
                                 Some(session) => crate::agents::claude_crew::stage_message(Path::new(&package.project), session, &text)
-                                    .map_err(|error| SessionError::Spawn(format!("the message could not be saved for the lead: {error}"))),
+                                    .map_err(|error| { SessionError::Spawn(format!("the message could not be saved for the lead: {error}"))
+                                }),
                                 None => Err(SessionError::NoSuchSession(root)),
                             }
                         }
@@ -2315,7 +2343,8 @@ fn handle(
                     let answer = if delivered {
                         let from = std::env::var_os("HOME")
                             .zip(claude_expected_sessions.get(&root))
-                            .and_then(|(home, session)| crate::agents::claude_crew::lead_transcript(Path::new(&home), session))
+                            .and_then(|(home, session)| { crate::agents::claude_crew::lead_transcript(Path::new(&home), session)
+                            })
                             .and_then(|transcript| std::fs::metadata(transcript).ok())
                             .map_or(0, |meta| meta.len());
                         claude_sent_briefs.insert(root, SentBrief { text: normalize_brief_text(&typed), submitted: false, from });
@@ -2458,7 +2487,8 @@ fn handle(
                 Ok(mut live) => {
                     live.run_started = true;
                     sessions.insert(id, live);
-                    if sessions.get(&id).is_some_and(|live| live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup())) {
+                    if sessions.get(&id).is_some_and(|live| { live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup())
+                    }) {
                         starting.insert(id, tx);
                         return;
                     }
@@ -2479,7 +2509,7 @@ fn handle(
         Request::SessionGroup(id, tx) => {
             let _ = tx.send(sessions.get(&id).and_then(|live| live.child.as_ref()).and_then(|child| child.id()));
         }
-        Request::Start(project, intent, tx) => {
+        Request::Start(project, intent, tx) | Request::StartReady(project, intent, tx) => {
             if !drivable(&intent) {
                 // The same capability tag `driver_for`'s own `None` answers
                 // with: nothing was attempted, so the PTY fallback this tag
@@ -2498,7 +2528,8 @@ fn handle(
                     /* Codex's app-server has not created its thread yet. Keep
                        the caller's draft and dialog alive until its correlated
                        protocol reply confirms a usable conversation. */
-                    if sessions.get(&id).is_some_and(|live| live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup())) {
+                    if sessions.get(&id).is_some_and(|live| { live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup())
+                    }) {
                         starting.insert(id, tx);
                         return;
                     }
@@ -2654,7 +2685,7 @@ fn handle(
                 ctx,
                 id,
                 live,
-                vec![answered.clone()],
+                vec![answered.clone()]
             );
             // The Codex Crew lead has a live journal and a mirrored root
             // journal. `CrewAttach` reads the latter, so settle its card too.
@@ -3308,8 +3339,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn idle_codex_stop_keeps_child_alive_and_accepts_the_next_write() {
-        use tokio::process::Command;
         use std::process::Stdio;
+        use tokio::process::Command;
 
         let (ctx, _) = tapped();
         let mut child = Command::new("cat")

@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use notify::RecommendedWatcher;
 use crate::context::Context;
+use notify::RecommendedWatcher;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -421,7 +421,8 @@ async fn close_merged(ctx: &Context, current: &Option<Project>, store: &mut Stor
     let dir = project.dir.clone();
     let aimed_at = target.clone();
     let found =
-        tokio::task::spawn_blocking(move || crate::vcs::merged::merged_tasks(&dir, &aimed_at, &ids))
+        tokio::task::spawn_blocking(move || { crate::vcs::merged::merged_tasks(&dir, &aimed_at, &ids)
+    })
             .await;
     let found = match found {
         Ok(found) => found,
@@ -913,6 +914,9 @@ async fn handle(
                 Some(bd) => bd.update(&id, &patch).await,
                 None => Err(no_tracker(health)),
             };
+            if result.is_ok() {
+                mark_change(ctx, current.as_ref().map(|p| p.dir.as_path())).await;
+            }
             let _ = reply.send(finish(ctx, store, result));
             false
         }
@@ -922,8 +926,11 @@ async fn handle(
                 // so the delta has to go out exactly as it does for a write
                 // somebody made in the window.
                 Some(bd) => finish(ctx, store, bd.update(&id, &patch).await),
-                None => Bd::new(ctx.clone(), dir).update(&id, &patch).await,
+                None => Bd::new(ctx.clone(), dir.clone()).update(&id, &patch).await,
             };
+            if result.is_ok() {
+                mark_change(ctx, Some(&dir)).await;
+            }
             let _ = reply.send(result);
             false
         }
@@ -932,6 +939,9 @@ async fn handle(
                 Some(bd) => bd.close(&id, reason.as_deref()).await,
                 None => Err(no_tracker(health)),
             };
+            if result.is_ok() {
+                mark_change(ctx, current.as_ref().map(|p| p.dir.as_path())).await;
+            }
             let _ = reply.send(finish(ctx, store, result));
             false
         }
@@ -940,6 +950,9 @@ async fn handle(
                 Some(bd) => bd.reopen(&id).await,
                 None => Err(no_tracker(health)),
             };
+            if result.is_ok() {
+                mark_change(ctx, current.as_ref().map(|p| p.dir.as_path())).await;
+            }
             let _ = reply.send(finish(ctx, store, result));
             false
         }
@@ -949,11 +962,18 @@ async fn handle(
                 None => Err(no_tracker(health)),
             };
             if result.is_ok() {
+                mark_change(ctx, current.as_ref().map(|p| p.dir.as_path())).await;
                 emit_delta(ctx, store.remove_one(&id));
             }
             let _ = reply.send(result);
             false
         }
+    }
+}
+
+async fn mark_change(ctx: &Context, project: Option<&Path>) {
+    if let (Some(sync), Some(project)) = (ctx.kanban_sync(), project) {
+        sync.changed(project).await;
     }
 }
 

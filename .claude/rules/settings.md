@@ -917,3 +917,7 @@ holds the other half in its own `settings.json`, written by patch and announced 
 the mock back end, still reads and writes one document whole. Which field is whose, the patch rules and the migration of a
 release's single file at switch-over are in `.claude/rules/remote.md`, "Settings: the server's half and the device's". A new field is the device's until `SERVER_ROOT` / `SERVER_PROJECT` in
 `crates/core/src/settings/split.rs` (and `ROOT` / `PROJECT_FIELDS` in `src/stores/settingsSplit.js`) say otherwise.
+
+## Project Kanban Dolt sync
+
+`ProjectState.kanban_sync` is server-owned and defaults to disabled, with `bd dolt pull`, `bd dolt push`, and a five-minute interval. Both `SERVER_PROJECT` in `settings/split.rs` and `PROJECT_FIELDS` in `src/stores/settingsSplit.js` must include `kanbanSync`; the server validates enabled commands and an integral interval of 1..1440 minutes. `projectKanbanSync.js` mirrors that check in the project settings draft. Invalid saved enabled blocks are disabled and diagnosed instead of executed. The project settings group is independent of `project.toml` health.

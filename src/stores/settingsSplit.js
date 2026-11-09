@@ -18,7 +18,7 @@ const plain = (value) => value !== null && typeof value === 'object' && !Array.i
 
 /* The server's per-project fields the view carries. `usedAt` is the server's too, but it stamps it
    itself, so it never travels in a patch. */
-const PROJECT_FIELDS = ['runSettings', 'agents', 'columnOrder']
+const PROJECT_FIELDS = ['runSettings', 'agents', 'columnOrder', 'kanbanSync']
 
 /* The server's fields of `appearance`: what a phone draws. `uiFontSize` stays on the device. */
 export const SERVER_APPEARANCE = ['theme', 'density']
@@ -242,6 +242,7 @@ export function combine(device, server) {
       runSettings: server.project?.runSettings,
       agents: server.project?.agents,
       columnOrder: server.project?.columnOrder,
+      kanbanSync: server.project?.kanbanSync,
       usedAt: server.project?.usedAt
     })
   }

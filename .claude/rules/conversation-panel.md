@@ -697,3 +697,7 @@ lets the retry through, and only one of them turned out to matter.
 Every failed result that mentions auto mode or the classifier is appended whole to `auto-mode-blocks.jsonl` beside
 `settings.json` (`session/blocks.rs`), with `matched` saying whether the exact phrase hit: the material for tuning the
 detector. Adding `denial` raised the remote protocol to 1.7 and `blocked_input` to 1.16 (`remote.md`).
+
+## Kanban sync before structured starts
+
+The session service gates user `Start` requests for drivable agents with a project-addressed Kanban pull, then requeues `StartReady` for exactly one launch. `runs/service.rs` pulls before the decisive board read for each run lead batch, including review and Crew paths, so a remote task prevents a false empty-queue stop. A rest that requires another board decision also pulls again. Disabled projects skip the wait. Attaching to a live session, sending a message, and internal model subagents do not pull. Failed or timed-out pull is visible through `kanban:sync` and does not cancel the original launch.

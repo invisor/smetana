@@ -87,6 +87,35 @@ async fn desktop(h: &Harness) -> (Phone, Client) {
     (phone, client)
 }
 
+#[tokio::test]
+async fn desktop_lifecycle_registers_before_calls_and_removes_on_disconnect() {
+    struct Lifecycle(Mutex<Vec<(&'static str, u64)>>);
+    impl Dispatch for Lifecycle {
+        fn call<'a>(&'a self, caller: &'a Caller, _: &'a str, _: Value) -> BoxFuture<'a, Result<Value, BridgeError>> {
+            Box::pin(async move {
+                self.0.lock().unwrap().push(("call", caller.id));
+                Ok(Value::Null)
+            })
+        }
+        fn client_join<'a>(&'a self, caller: &'a Caller) -> BoxFuture<'a, ()> {
+            Box::pin(async move { self.0.lock().unwrap().push(("join", caller.id)); })
+        }
+        fn client_gone<'a>(&'a self, caller: &'a Caller) -> BoxFuture<'a, ()> {
+            Box::pin(async move { self.0.lock().unwrap().push(("gone", caller.id)); })
+        }
+    }
+    let h = harness().await;
+    let lifecycle = Arc::new(Lifecycle(Mutex::new(Vec::new())));
+    h.remote.hub.set_dispatch(lifecycle.clone());
+    let (_phone, mut client) = desktop(&h).await;
+    client.call("tracker_health", json!({})).await.unwrap();
+    client.conn.close(0u32.into(), b"gone");
+    wait_until("the desktop lifecycle", || lifecycle.0.lock().unwrap().len() == 3).await;
+    let events = lifecycle.0.lock().unwrap();
+    assert_eq!(events.iter().map(|(event, _)| *event).collect::<Vec<_>>(), ["join", "call", "gone"]);
+    assert!(events.iter().all(|(_, id)| *id == events[0].1));
+}
+
 async fn listening(h: &Harness, client: &mut Client, expected: usize) {
     client.send_msg(remote_protocol::ClientMsg::Listen { event: "terminal:output".into() }).await;
     wait_until("the listener", || h.remote.hub.listeners("terminal:output") == expected).await;

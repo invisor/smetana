@@ -71,7 +71,8 @@ const SERVER_APPEARANCE: &[&str] = &["theme", "density"];
 /// The server's fields of one project: the run dialog's last settings (the target branch is read when
 /// a run starts), the project's own agent table, and the stamp the least recently used project is
 /// dropped by. `usedAt` is also kept on the device, for the device file's own limit.
-const SERVER_PROJECT: &[&str] = &["runSettings", "agents", "usedAt", "columnOrder"];
+const SERVER_PROJECT: &[&str] = &["runSettings", "agents", "usedAt", "columnOrder",
+    "kanbanSync",];
 
 /// The server's fields, in the order a person reads them, as paths. Held to the schema by a test.
 #[cfg(test)]
@@ -167,7 +168,8 @@ fn keep_device(value: &Value) -> Value {
                         let fields: Map<String, Value> = fields
                             .iter()
                             // `usedAt` stays on both sides, each for its own file's limit.
-                            .filter(|(name, _)| name.as_str() == "usedAt" || !SERVER_PROJECT.contains(&name.as_str()))
+                            .filter(|(name, _)| { name.as_str() == "usedAt" || !SERVER_PROJECT.contains(&name.as_str())
+                            })
                             .map(|(k, v)| (k.clone(), v.clone()))
                             .collect();
                         kept.insert(path.clone(), Value::Object(fields));
@@ -261,6 +263,20 @@ pub fn apply_patch(
     }
 
     let wanted = keep_server(patch);
+    if let Some(projects) = wanted.get("projects").and_then(Value::as_object) {
+        for (project, state) in projects {
+            if let Some(sync) = state.get("kanbanSync") {
+                if !sync.is_null() {
+                    let _: model::KanbanSync =
+                        serde_json::from_value(sync.clone()).map_err(|err| {
+                            SettingsError::Patch(format!(
+                                "{project}: invalid Kanban sync settings: {err}"
+                            ))
+                        })?;
+                }
+            }
+        }
+    }
     if &wanted != patch {
         log::warn!("settings: a patch named fields that are not the server's; they were dropped");
     }
@@ -269,6 +285,16 @@ pub fn apply_patch(
     let Outcome::Ok(mut next) = parse(&doc.to_string()) else {
         return Err(SettingsError::Patch("the patched settings did not read back".to_owned()));
     };
+    if let Some(projects) = wanted.get("projects").and_then(Value::as_object) {
+        for project in projects.keys() {
+            if let Some(state) = next.projects.get(project) {
+                state
+                    .kanban_sync
+                    .check()
+                    .map_err(|error| SettingsError::Patch(format!("{project}: {error}")))?;
+            }
+        }
+    }
     if !only_if_fresh {
         if let Some(projects) = wanted.get("projects").and_then(Value::as_object) {
             for (project, state) in projects {
@@ -456,7 +482,8 @@ pub fn look_patch(settings: &Settings) -> Value {
     let projects: Map<String, Value> = settings
         .projects
         .iter()
-        .map(|(path, state)| (path.clone(), serde_json::json!({ "columnOrder": state.column_order })))
+        .map(|(path, state)| { (path.clone(), serde_json::json!({ "columnOrder": state.column_order }))
+        })
         .collect();
     let mut patch = serde_json::json!({
         "appearance": { "theme": settings.appearance.theme, "density": settings.appearance.density },
@@ -607,6 +634,7 @@ mod tests {
                 "conversationPanel", "subscription", "runFailover", "remote", "openProjects", "lastProject", "kanban",
                 "git.removeWorktrees", "appearance.theme", "appearance.density", "projects.*.runSettings", "projects.*.agents",
                 "projects.*.usedAt", "projects.*.columnOrder",
+                "projects.*.kanbanSync",
             ]
         );
         // Every root key of the schema is classified, and the device's are the ones below. A key
@@ -626,6 +654,43 @@ mod tests {
             assert!(in_server || in_device, "`{key}` belongs to no half");
             assert!(!(in_server && in_device) || key == "git" || key == "appearance" || key == "projects", "`{key}` belongs to both halves");
         }
+    }
+
+    #[test]
+    fn kanban_sync_is_server_owned_and_invalid_enabled_settings_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let patch = serde_json::json!({"projects": {"/work/a": {"kanbanSync": {
+            "enabled": true, "pullCommand": "pull --quoted 'two words'",
+            "pushCommand": "push", "pullIntervalMinutes": 7
+        }}}});
+        let saved = apply_patch(&path, &patch, "2026-01-01T00:00:00Z", false, &|_| {})
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            saved["projects"]["/work/a"]["kanbanSync"]["pullIntervalMinutes"],
+            7
+        );
+        assert_eq!(
+            file::load(&path).0.projects["/work/a"]
+                .kanban_sync
+                .pull_command,
+            "pull --quoted 'two words'"
+        );
+        for broken in [
+            serde_json::json!({"enabled": true, "pullCommand": "", "pushCommand": "push", "pullIntervalMinutes": 7}),
+            serde_json::json!({"enabled": true, "pullCommand": "pull", "pushCommand": "push", "pullIntervalMinutes": 0}),
+            serde_json::json!({"enabled": true, "pullCommand": "pull", "pushCommand": "push", "pullIntervalMinutes": "no"}),
+        ] {
+            let invalid = serde_json::json!({"projects": {"/work/a": {"kanbanSync": broken}}});
+            assert!(apply_patch(&path, &invalid, "2026-01-01T00:00:00Z", false, &|_| {}).is_err());
+        }
+        assert_eq!(
+            file::load(&path).0.projects["/work/a"]
+                .kanban_sync
+                .pull_interval_minutes,
+            7
+        );
     }
 
     #[test]
@@ -708,11 +773,12 @@ mod tests {
         last.as_object_mut().unwrap().remove("rev");
         assert_eq!(last, server_half(&after), "the last state announced is the state on disk");
         // Each announcement holds everything before it: the states are heard in the order written.
-        let held = |half: &Value| ["agent", "agentLanguage", "agentPrompt", "conversationPanel"].iter().filter(|key| half[**key] != server_half(&Settings::default())[**key]).count()
+        let held = |half: &Value| { ["agent", "agentLanguage", "agentPrompt", "conversationPanel"].iter().filter(|key| half[**key] != server_half(&Settings::default())[**key]).count()
             + usize::from(half["subscription"]["pauseAt"] != 90)
             + usize::from(half["runFailover"]["enabled"] == true)
             + usize::from(half["git"]["removeWorktrees"] == false)
-            + usize::from(half["remote"]["relayUrl"] != "https://relay.smetana.io");
+            + usize::from(half["remote"]["relayUrl"] != "https://relay.smetana.io")
+        };
         let counts: Vec<usize> = heard.iter().map(held).collect();
         assert_eq!(counts, [1, 2, 3, 4, 5, 6, 7, 8]);
     }

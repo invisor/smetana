@@ -12,8 +12,8 @@
 use std::path::PathBuf;
 
 use super::file;
-use crate::context::Context;
 use super::model::{merge, resolve, ResolvedSettings};
+use crate::context::Context;
 
 /// Settings have almost no read errors: the file may be missing, it may be
 /// broken — that is ordinary life, not a failure. There are two real troubles:
@@ -89,6 +89,11 @@ pub fn load_from(path: &std::path::Path, project: Option<String>) -> Result<Reso
 /// The file is re-read on every write: a person may have edited it between two
 /// saves, and other projects' entries in it must not be lost.
 pub async fn settings_save(ctx: &Context, settings: ResolvedSettings) -> Result<(), SettingsError> {
+    settings
+        .project
+        .kanban_sync
+        .check()
+        .map_err(|error| SettingsError::Patch(error.into()))?;
     let path = settings_path(&ctx)?;
     // The same lock a patch takes (`split::apply_patch`): a whole-document write that landed between a
     // patch's read and its rename would be undone by it, or undo it. Nothing below awaits.

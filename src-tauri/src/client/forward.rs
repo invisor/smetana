@@ -87,6 +87,7 @@ const READS: &[&str] = &[
     "tracker_health",
     "tracker_snapshot",
     "tracker_resync",
+    "kanban_sync_state",
     "tracker_failure",
     "tracker_probe",
     "project_root",

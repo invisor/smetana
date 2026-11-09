@@ -48,13 +48,13 @@ use super::model::{
 use super::preflight;
 use super::queue::{self, Action, LastBatch, QueueSnapshot};
 use super::recovery;
-use super::rest;
 use super::registry::{self, Proc};
 use super::report::{self, BatchLine, BatchOutcome, LockRelease};
+use super::rest;
 use super::summary::{self, Baseline, RunSummary};
 use super::usage::{self, Decision};
-use crate::agents::{Intent, Profile};
 use crate::agents::crew::CrewCapabilities;
+use crate::agents::{Intent, Profile};
 use crate::runs::session::{self, RunSession, Transport};
 use crate::session::service::SessionHandle;
 use crate::terminal::model::{Exit, SessionState};
@@ -596,6 +596,7 @@ fn handle(
                 terminal.clone(),
                 session.clone(),
                 run_session,
+                ctx.kanban_sync().cloned(),
                 report.clone(),
                 stop_rx,
                 // Owned rather than borrowed: `drive` is spawned onto a task
@@ -896,6 +897,7 @@ async fn drive(
     terminal: TerminalHandle,
     session: SessionHandle,
     run_session: RunSession,
+    kanban_sync: Option<crate::tracker::sync::Handle>,
     report: mpsc::UnboundedSender<Report>,
     mut stop: mpsc::Receiver<()>,
     // Where a headless probe of this run's own harness runs — the gate and
@@ -1004,7 +1006,9 @@ async fn drive(
         run.session = None;
         say(&run);
 
-        let Some((issues, source)) = board(&tracker, &root).await else {
+        let Some((issues, source)) = board_for_decision(
+            &tracker, &root, kanban_sync.as_ref(), &run.project, false,
+        ).await else {
             unreadable += 1;
             account.journal.say(&journal::unreadable_board(
                 journal::Read::Decision,
@@ -1128,7 +1132,9 @@ async fn drive(
                     // batch before and is only replaced below.
                     run.advance(RunState::Deciding);
                     say(&run);
-                    let Some((issues, source)) = fresh_board(&tracker, &root).await else {
+                    let Some((issues, source)) = board_for_decision(
+                        &tracker, &root, kanban_sync.as_ref(), &run.project, true,
+                    ).await else {
                         // `continue` is safe here and only here: `rested_after`
                         // is already set, so the lap that follows takes no
                         // second pause for this boundary, and `previous` is
@@ -1459,9 +1465,8 @@ async fn drive(
             || matches!(&outcome, Batch::Ended(Exit::NoCode));
         if could_be_limited {
             let probe_now = probe.clone();
-            let reading = tokio::task::spawn_blocking(move || {
-                usage::read(profile?, probe_now.as_deref()?)
-            })
+            let reading = tokio::task::spawn_blocking(move ||
+                usage::read(profile?, probe_now.as_deref()?))
             .await
             .unwrap_or(None);
             if usage::spent(reading.as_ref()) {
@@ -1548,7 +1553,7 @@ async fn drive(
                 let fresh_board = queue::snapshot(
                     &fresh_after,
                     &run.settings.scope,
-                    run.settings.min_priority,
+                    run.settings.min_priority
                 );
                 let final_leftovers = handoff_leftovers(Some(&fresh_after), &actor)
                     .expect("a successful post-quiet board read has a claim set");
@@ -1664,7 +1669,8 @@ async fn drive(
             Batch::AnswerCancelled { .. } => {
                 let proof = handoff_life(handoff_gate(), life, terminal_ack);
                 match cancelled_releasable(&leftovers, proof) {
-                    Some(claims) => release_claims(&tracker, &root, &repos, batch_no, &actor, claims, proof).await,
+                    Some(claims) => { release_claims(&tracker, &root, &repos, batch_no, &actor, claims, proof).await
+                    }
                     None => {
                         account.journal.say(&format!(
                             "batch {batch_no} claims retained: cancelled process group could not be proven stopped; leftovers={}",
@@ -1830,9 +1836,8 @@ async fn drive(
         // crash, and the run would end as `Crashed` after `MAX_CRASHES` with
         // nothing having crashed.
         let probe_now = probe.clone();
-        let reading = tokio::task::spawn_blocking(move || {
-            usage::read(profile?, probe_now.as_deref()?)
-        })
+        let reading = tokio::task::spawn_blocking(move ||
+            usage::read(profile?, probe_now.as_deref()?))
         .await
         .unwrap_or(None);
         if usage::spent(reading.as_ref()) {
@@ -1942,7 +1947,8 @@ fn journal_batch_lines(
     leftovers: &[queue::Leftover],
 ) -> (String, String) {
     let board = match (snapshot, source) {
-        (Some(snapshot), Some(source)) => journal::board(journal::Read::AfterBatch, snapshot, source),
+        (Some(snapshot), Some(source)) => { journal::board(journal::Read::AfterBatch, snapshot, source)
+        }
         _ => journal::unreadable_board(journal::Read::AfterBatch, None),
     };
     let ended = journal::batch_ended(batch, outcome, seconds, reported, leftovers);
@@ -2106,9 +2112,8 @@ async fn finish(
 fn read_batch(dir: &Path, n: u32, seconds: u64, outcome: BatchOutcome) -> BatchLine {
     let parsed = match std::fs::read_to_string(dir.join(format!("batch-{n}.json"))) {
         Ok(text) => report::parse_batch(&text),
-        Err(_) => {
-            report::ParsedBatch { tasks: vec![], notes: None, summary: None, reported_ok: false }
-        }
+        Err(_) =>
+            report::ParsedBatch { tasks: vec![], notes: None, summary: None, reported_ok: false },
     };
     BatchLine {
         n,
@@ -2180,7 +2185,7 @@ fn handoff_permitted(gate: HandoffGate, life: queue::BatchLife, terminal_ack: bo
 fn handoff_life(
     gate: HandoffGate,
     life: queue::BatchLife,
-    terminal_ack: bool,
+    terminal_ack: bool
 ) -> queue::BatchLife {
     handoff_permitted(gate, life, terminal_ack)
         .then_some(queue::BatchLife::ProvenDead)
@@ -2321,7 +2326,8 @@ async fn release_claims(
         // started in every repository the project declares for a sentence
         // nobody is going to write.
         let work = (!left.lock)
-            .then(|| repos.iter().find_map(|repo| crate::git::task_work(&root.join(repo), &left.id)))
+            .then(|| { repos.iter().find_map(|repo| crate::git::task_work(&root.join(repo), &left.id))
+            })
             .flatten();
         let borrowed = work.as_ref().map(|(branch, commit)| (branch.as_str(), commit.as_str()));
         let Some(patch) = queue::release(left, batch, actor, borrowed, life) else { continue };
@@ -3030,6 +3036,29 @@ async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64) -> bool {
     rx.await.unwrap_or(false)
 }
 
+async fn pull_for_run(sync: Option<&crate::tracker::sync::Handle>, project: &str) {
+    if let Some(sync) = sync.filter(|sync| sync.enabled(project)) {
+        if let Err(error) = sync.pull(project).await {
+            log::warn!("kanban sync before run lead in {project}: {}", error.stderr);
+        }
+    }
+}
+
+async fn board_for_decision(
+    tracker: &TrackerHandle,
+    root: &Path,
+    sync: Option<&crate::tracker::sync::Handle>,
+    project: &str,
+    fresh: bool,
+) -> Option<(Vec<crate::tracker::model::Issue>, BoardSource)> {
+    pull_for_run(sync, project).await;
+    if fresh {
+        fresh_board(tracker, root).await
+    } else {
+        board(tracker, root).await
+    }
+}
+
 /// One batch. `agent` is the id from `settings.json`, read when the run started;
 /// what actually spawns is still `terminal_create`'s answer, the same as for
 /// every other session, so the fallback to whatever is installed lives in one
@@ -3480,6 +3509,57 @@ mod tests {
     use super::*;
     use crate::runs::model::{RunMode, RunScope};
 
+    struct SyncSink;
+    impl crate::context::Sink for SyncSink {
+        fn emit(&self, _: &str, _: serde_json::Value) {}
+        fn push(&self, _: crate::remote::push::Message) {}
+    }
+
+    #[tokio::test]
+    async fn remote_task_is_seen_before_the_run_can_decide_to_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let project = root.to_string_lossy().into_owned();
+        let mut settings = crate::settings::model::Settings::default();
+        settings.projects.insert(project.clone(), crate::settings::model::ProjectState {
+            kanban_sync: crate::settings::model::KanbanSync {
+                enabled: true, pull_command: "printf x >> remote-visible".into(), ..Default::default()
+            }, ..Default::default()
+        });
+        crate::settings::file::save(&dir.path().join("settings.json"), &settings).unwrap();
+        let ctx = crate::context::Context::new(Err("x".into()), Ok(dir.path().to_path_buf()),
+            Err("x".into()), None, std::sync::Arc::new(SyncSink));
+        let (sender, mut receiver) = mpsc::channel(4);
+        let tracker = TrackerHandle(sender);
+        let _coordinator = crate::tracker::sync::start(ctx.clone(), tracker.clone());
+        let remote = root.join("remote-visible");
+        let worker = tokio::spawn(async move {
+            while let Some(request) = receiver.recv().await {
+                match request {
+                    TrackerRequest::Current(reply) => drop(reply),
+                    TrackerRequest::BoardAt { reply, .. } => {
+                        let issues = if remote.exists() { vec![crate::tracker::model::Issue {
+                            id: "remote-1".into(), status: "open".into(), ..Default::default()
+                        }] } else { vec![] };
+                        let _ = reply.send(Ok((issues, BoardSource::Direct)));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let sync = ctx.kanban_sync().unwrap().clone();
+        let (issues, _) = board_for_decision(&tracker, &root, Some(&sync), &project, false).await.unwrap();
+        let snapshot = queue::snapshot(&issues, &RunScope::Queue, None);
+        assert!(matches!(queue::next_action(&snapshot, None, 0, 10, LastBatch::Completed, false), Action::Run(_)));
+        assert_eq!(std::fs::read_to_string(root.join("remote-visible")).unwrap(), "x");
+        drop(tracker);
+        drop(ctx);
+        drop(_coordinator);
+        worker.abort();
+    }
+
     fn settings(scope: RunScope) -> RunSettings {
         RunSettings {
             scope,
@@ -3688,7 +3768,7 @@ mod tests {
         let leader_exited_but_member_writes = batch_life_with(
             Some(&group),
             &|_| registry::Seen::Gone,
-            &|_| false,
+            &|_| false
         );
 
         assert_eq!(leader_exited_but_member_writes, queue::BatchLife::Unproven);

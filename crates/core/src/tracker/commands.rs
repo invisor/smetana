@@ -37,6 +37,12 @@ pub async fn snapshot(handle: &TrackerHandle) -> Result<Snapshot, TrackerError> 
     ask(handle, Request::Snapshot).await
 }
 
+pub async fn current(
+    handle: &TrackerHandle,
+) -> Result<(Option<std::path::PathBuf>, Health, Snapshot), TrackerError> {
+    ask(handle, Request::Current).await
+}
+
 pub async fn tracker_resync(handle: &TrackerHandle) -> Result<Snapshot, TrackerError> {
     ask(&handle, Request::Resync).await?
 }

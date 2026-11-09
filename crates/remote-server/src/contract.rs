@@ -744,6 +744,15 @@ fn server_replies(map: &mut BTreeMap<&'static str, Vec<Value>>) {
     let conflict = MergeOutcome::Conflict { files: vec!["src/a.js".into()] };
 
     map.insert("tracker_resync", all(&snapshots()));
+    map.insert("kanban_sync_pull", nothing());
+    map.insert("kanban_sync_presence", nothing());
+    map.insert("kanban_sync_state", vec![json_of(&smetana_core::tracker::sync::State {
+        project: "/work/smetana".into(),
+        pull_error: Some(smetana_core::tracker::sync::command::Error {
+            operation: "pull".into(), code: Some(1), timed_out: false, stderr: "remote unavailable".into(),
+        }),
+        push_error: None,
+    })]);
     for name in ["tracker_update", "tracker_close", "tracker_reopen"] {
         map.insert(name, vec![json_of(&issue(true)), json_of(&issue(false))]);
     }
@@ -1007,6 +1016,9 @@ fn settings_halves() -> Vec<Value> {
         ProjectState {
             run_settings: Some(RunDefaults { min_priority: Some(2), ..RunDefaults::default() }),
             agents: Some(ProjectAgents { agent: "codex".into(), ..ProjectAgents::default() }),
+            kanban_sync: crate::settings::model::KanbanSync {
+                enabled: true, pull_command: "bd dolt pull".into(), push_command: "bd dolt push".into(), pull_interval_minutes: 5,
+            },
             used_at: Some("2026-10-26T10:00:00+00:00".into()),
             ..ProjectState::default()
         },
@@ -1128,6 +1140,13 @@ fn server_payloads(map: &mut BTreeMap<&'static str, Vec<Value>>) {
         ],
     );
     map.insert("settings:changed", settings_halves());
+    map.insert("kanban:sync", vec![json_of(&smetana_core::tracker::sync::State {
+        project: "/work/smetana".into(),
+        pull_error: Some(smetana_core::tracker::sync::command::Error {
+            operation: "pull".into(), code: Some(1), timed_out: false, stderr: "remote unavailable".into(),
+        }),
+        push_error: None,
+    })]);
     map.insert("server:restart-deferred", vec![crate::gateway::deferred_payload(&restart_work())]);
     map.insert(
         "terminal:log",
