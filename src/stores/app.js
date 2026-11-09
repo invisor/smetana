@@ -17,6 +17,7 @@ import { downloadDir, resourceDir as tauriResourceDir } from '@tauri-apps/api/pa
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { open } from '@tauri-apps/plugin-dialog'
+import { error as logError, info as logInfo, warn as logWarn } from '@tauri-apps/plugin-log'
 import { usingMockBackend } from './mockBackend.js'
 import { CHROME_NONE, chromeFromPlatform } from '../components/shell/windowChrome.js'
 import { dirname } from '../paths.js'
@@ -160,6 +161,7 @@ export async function openDialogWindow(kind, width) {
     await invoke('dialog_window_open', { kind, width })
   } catch (err) {
     console.error('[app] the dialog window did not open:', err)
+    logToApp('error', `[app] dialog ${kind}: the window did not open: ${err}`)
   }
 }
 
@@ -589,6 +591,39 @@ export async function appVersion() {
    installs the fixtures publishes what it decided, and that is the only honest
    answer here. */
 const hasBackEnd = () => Boolean(window.__TAURI_INTERNALS__) && !usingMockBackend()
+
+const LOGGERS = { error: logError, warn: logWarn, info: logInfo }
+
+/* One line into the desktop app's own log — `Smetana.log` under the app's data
+   directory, the file `tauri-plugin-log` writes in `src-tauri/src/lib.rs` —
+   from the front end, which until smetana-j4wk had no way to put anything
+   there. A webview's console is written to no file at all, so a dialog window
+   that never appeared on somebody's Linux machine left nothing behind to say
+   why, and the person who reported it had no way to hand anybody a reason.
+
+   `level` is `info`, `warn` or `error`; anything else is written as `info`
+   rather than refused, because a log line with the wrong level is worth more
+   than none. The text is English, like every log line in the tree.
+
+   **It never throws and never rejects.** A failed write to the log is not worth
+   a second failure on top of whatever was being logged, and every caller is
+   already on an error path of its own. It does nothing at all under the mock
+   back end: `npm run dev` has no log to write to, and the mock would refuse
+   `plugin:log|log` loudly on every line.
+
+   The plugin's command is answered by the shell itself and never forwarded to
+   `smetanad`: plugin commands are dispatched to their plugin before the app's
+   own `invoke_handler`, which is the only thing `client::handler` wraps — the
+   same road the clipboard, the dialog and the opener already take. */
+export async function logToApp(level, message) {
+  if (!hasBackEnd()) return
+  const write = LOGGERS[level] ?? logInfo
+  try {
+    await write(String(message))
+  } catch {
+    /* Nowhere left to say it. */
+  }
+}
 
 /* A link goes to the person's own browser. Inside the webview it would replace
    the app with a web page and leave no way back — there is no address bar and no

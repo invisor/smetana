@@ -61,7 +61,18 @@
    so the same `ref` is carried out to Rust — one channel continued rather than
    a second source of the same truth, and `window::dialog_window_closable` is
    where it lands and what it costs. */
-import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch, watchEffect } from 'vue'
+import {
+  computed,
+  onErrorCaptured,
+  onMounted,
+  onUnmounted,
+  provide,
+  reactive,
+  ref,
+  shallowRef,
+  watch,
+  watchEffect
+} from 'vue'
 import DeleteBranchModal from '../components/git/DeleteBranchModal.vue'
 import DeleteSessionModal from '../components/agent/DeleteSessionModal.vue'
 import FolderBrowserModal from '../components/projects/FolderBrowserModal.vue'
@@ -84,6 +95,7 @@ import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appeara
 import { paintRoot, usePrefersDark } from './useAppearance.js'
 import {
   emitDialogResult,
+  logToApp,
   openImageWindow,
   setDialogWindowClosable,
   sizeDialogWindow,
@@ -142,6 +154,48 @@ const COMPONENTS = {
 }
 
 const component = computed(() => COMPONENTS[props.kind] ?? null)
+
+/* One line about this window into the desktop app's own log, prefixed with the
+   kind so that one grep finds a window's whole life beside Rust's
+   `dialog <kind>:` lines (smetana-j4wk). This window used to fail in exactly
+   one way that nobody could see — never shown — and the console it said so in
+   is written to no file at all. One line per step, never per frame: neither
+   the observer's deliveries nor the viewport's are said here. */
+function say(level, message) {
+  logToApp(level, `[dialog:${props.kind ?? '(no kind)'}] ${message}`)
+}
+
+/* A guest that threw while setting itself up or drawing, kept rather than lost.
+
+   Without this the root drew nothing, measured nothing, and — the window being
+   shown by its first measurement alone — never appeared: the shape of the run
+   dialog's failure on Linux (smetana-j4wk). With it the guest is taken out and
+   the empty state below is drawn in its place, which has height, so the window
+   is measured and shown and the person reads *why* instead of seeing nothing.
+   Returning `false` stops it here: there is nothing above this file that could
+   do anything better with it. */
+const guestError = ref(null)
+const describeError = (err) => (err instanceof Error ? err.message : String(err))
+onErrorCaptured((err, _instance, info) => {
+  if (!guestError.value) {
+    guestError.value = describeError(err) || 'An error with no message.'
+    say('error', `the dialog threw while drawing (${info}): ${err?.stack ?? describeError(err)}`)
+  }
+  return false
+})
+
+/* What escapes Vue altogether — an event handler's own promise, a timer — goes
+   to the log as well. Not drawn: an error outside the guest's render says
+   nothing about whether the window has anything on it. */
+const onWindowError = (event) => {
+  say('error', `uncaught: ${event.error?.stack ?? event.message}`)
+}
+const onRejection = (event) => {
+  const reason = event.reason
+  say('error', `unhandled rejection: ${reason?.stack ?? describeError(reason)}`)
+}
+window.addEventListener('error', onWindowError)
+window.addEventListener('unhandledrejection', onRejection)
 
 /* What `Modal.vue` reads to know it is drawing inside a window: no scrim, no
    header of its own, no border, no radius, no shadow — the OS frame carries all
@@ -369,6 +423,11 @@ watchEffect(() => {
 const told = ref(false)
 const FIRST_PAINT_WAIT = 250
 const stopWaiting = setTimeout(() => {
+  /* A warning rather than a note: reaching `told` this way means the app
+     window never answered this window's hello, so the guest is about to draw on
+     its own fallbacks — and that is worth a line in the log whether or not the
+     window then appears (smetana-j4wk). */
+  if (!told.value) say('warn', `nothing was announced within ${FIRST_PAINT_WAIT} ms, drawing without props`)
   told.value = true
 }, FIRST_PAINT_WAIT)
 
@@ -623,7 +682,15 @@ watch(
       : [told.value, measured.value, viewport.value, title.value],
   async () => {
     if (!told.value || measured.value <= 0) return
+    const first = !reported.value
     const answer = await sizeDialogWindow(props.kind, measured.value, viewport.value, title.value)
+    /* The first report is the call that shows this window, so its outcome is
+       the one line that says whether the window should now be on screen.
+       Later reports are a window resizing itself and say nothing new. */
+    if (first && !reported.value) {
+      if (answer) say('info', `first size report sent (height ${measured.value}), the window is shown`)
+      else say('error', `the first size report failed (height ${measured.value}), the window stays hidden`)
+    }
     /* Only for a call that arrived. `null` is a call that did not, and the
        three ways this one can fail — `scale_factor`, `inner_size`, `show` — are
        all at or before the line that puts the window on screen, so a failed
@@ -654,19 +721,55 @@ watch(
    up, the observer takes over and corrects this number if fonts or images
    arriving later move it. The root has no padding or border, so its border box
    is the content box the observer would have reported. */
-watch(
-  [told, () => props.kind],
-  () => {
-    if (!told.value || measured.value > 0 || !root.value) return
-    const height = Math.ceil(root.value.getBoundingClientRect().height)
-    if (height > 0) measured.value = height
-  },
-  { flush: 'post', immediate: true }
-)
+/* **Retried rather than taken once** (smetana-j4wk). The one-shot version ran
+   on `[told, kind]` alone, so a root that happened to be 0 tall at that moment
+   — a guest still settling, props arriving after `FIRST_PAINT_WAIT` had already
+   drawn it once, a guest that threw — was never measured again, and on Linux
+   that is a window that never appears. So it also runs when the announcement
+   changes and when a guest error replaces the guest, and while the answer is
+   still 0 it asks again on a timer. A timer and not `requestAnimationFrame`:
+   that one is a rendering update too, and like the observer it may never come
+   for a window that has never been mapped. Every look is logged until one
+   lands, and the last failure says so, since that is the window this exists
+   for. */
+const MEASURE_RETRY_MS = 100
+const MEASURE_TRIES = 20
+let measureTimer = null
+let measureTries = 0
+const stopMeasuring = () => {
+  clearTimeout(measureTimer)
+  measureTimer = null
+}
+const measureByHand = () => {
+  stopMeasuring()
+  if (!told.value || measured.value > 0 || !root.value) return
+  const height = Math.ceil(root.value.getBoundingClientRect().height)
+  say('info', `measured by hand: ${height}`)
+  if (height > 0) {
+    measured.value = height
+    return
+  }
+  measureTries += 1
+  if (measureTries >= MEASURE_TRIES) {
+    say('error', `still 0 tall after ${MEASURE_TRIES} looks, giving up; Rust shows the window at a fallback height`)
+    return
+  }
+  measureTimer = setTimeout(measureByHand, MEASURE_RETRY_MS)
+}
+watch([told, () => props.kind, incoming, guestError], measureByHand, {
+  flush: 'post',
+  immediate: true
+})
 
 const stops = []
 
+/* Whether the app window has announced anything yet, for the one log line that
+   says so. Not `told`: the timeout sets that too, and the difference between the
+   two is exactly what the log is for. */
+let heardProps = false
+
 onMounted(async () => {
+  say('info', 'mounted')
   if (root.value) {
     observer = new ResizeObserver(([entry]) => {
       measured.value = Math.ceil(entry.contentRect.height)
@@ -680,6 +783,7 @@ onMounted(async () => {
   if (props.kind === 'new-task') {
     holdAttachments().catch((err) => {
       console.warn('[dialog-window] the attachment store did not load:', err)
+      say('warn', `the attachment store did not load: ${describeError(err)}`)
     })
   }
   if (props.kind === 'project-settings') refreshCodexModels()
@@ -690,29 +794,39 @@ onMounted(async () => {
     try {
       stops.push(
         await watchDialogProps(props.kind, (next) => {
+          if (!heardProps) {
+            heardProps = true
+            say('info', 'props announced by the app window')
+          }
           incoming.value = next ?? {}
           told.value = true
         })
       )
     } catch (err) {
       console.warn('[dialog-window] no app window to be told what to draw by:', err)
+      say('warn', `no app window to be told what to draw by: ${describeError(err)}`)
     }
   }
   try {
     stops.push(await watchSharedSettings((state) => adopt(state, true)))
   } catch (err) {
     console.warn('[dialog-window] no app window to follow:', err)
+    say('warn', `no app window to follow: ${describeError(err)}`)
   }
   try {
     const stored = await readSharedSettings()
     if (!heard.value) adopt(stored, false)
   } catch (err) {
     console.warn('[dialog-window] the settings could not be read:', err)
+    say('warn', `the settings could not be read: ${describeError(err)}`)
   }
 })
 
 onUnmounted(() => {
   clearTimeout(stopWaiting)
+  stopMeasuring()
+  window.removeEventListener('error', onWindowError)
+  window.removeEventListener('unhandledrejection', onRejection)
   document.removeEventListener('keydown', onKeydown)
   window.removeEventListener('resize', readViewport)
   observer?.disconnect()
@@ -758,9 +872,24 @@ const rootStyle = computed(() =>
   <div ref="root" :style="rootStyle">
     <component
       :is="component"
-      v-if="component && told"
+      v-if="component && told && !guestError"
       v-bind="{ ...guestProps, ...listeners }"
     />
+    <!-- A guest that threw while drawing (smetana-j4wk). Drawn rather than
+         left blank for the same reason the empty state below is: the first
+         measurement is what shows this window at all, and an empty root
+         measures nothing — which on Linux was a press on the run dialog that
+         did nothing and said nothing. This has height, so the window comes up
+         and says what went wrong, and the whole trace is in the app log. -->
+    <EmptyState
+      v-else-if="guestError"
+      icon="triangle-alert"
+      tone="error"
+      title="This dialog could not be drawn"
+      description="The error was written to the app log, Smetana.log."
+    >
+      <template #detail>{{ guestError }}</template>
+    </EmptyState>
     <!-- A kind with no component behind it. Drawn rather than left blank
          because the first measurement is what shows this window at all: an
          empty root measures nothing, nothing is sent, and the result is a

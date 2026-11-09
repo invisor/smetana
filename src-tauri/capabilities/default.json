@@ -18,6 +18,7 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
     "window-state:default",
+    "log:default",
     "dialog:allow-open",
     "clipboard-manager:allow-write-text",
     "opener:allow-reveal-item-in-dir",

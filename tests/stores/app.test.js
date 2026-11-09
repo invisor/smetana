@@ -270,3 +270,47 @@ describe('the resource directory', () => {
     expect(ipc.calls('plugin:path|resolve_directory')).toHaveLength(1)
   })
 })
+
+/* `logToApp`, the front end's one road into the desktop app's own log
+   (smetana-j4wk). Both halves of its promise are about not making things worse:
+   it never turns a failed log write into a second failure, and it says nothing
+   at all where there is no log to say it to. */
+describe('writing to the app log', () => {
+  it('writes the line through the log plugin at the level asked for', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('plugin:log|log', null)
+    await stores.app.logToApp('warn', '[dialog:run] could not be measured')
+    const [call] = ipc.calls('plugin:log|log')
+    expect(call.message).toBe('[dialog:run] could not be measured')
+    /* The plugin's own numbering: 3 is info, 4 is warn, 5 is error. */
+    expect(call.level).toBe(4)
+  })
+
+  it('writes an unknown level as info rather than refusing it', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('plugin:log|log', null)
+    await stores.app.logToApp('loud', 'a line')
+    expect(ipc.calls('plugin:log|log')[0].level).toBe(3)
+  })
+
+  it('resolves without throwing when the write is refused', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.fail('plugin:log|log', new Error('no log'))
+    await expect(stores.app.logToApp('error', 'a line')).resolves.toBeUndefined()
+  })
+
+  it('makes no call at all under the mock back end', async () => {
+    vi.doMock('../../src/stores/mockBackend.js', async (original) => ({
+      ...(await original()),
+      usingMockBackend: () => true
+    }))
+    try {
+      const { stores, ipc } = await loadStores()
+      ipc.on('plugin:log|log', null)
+      await stores.app.logToApp('error', 'a line')
+      expect(ipc.calls('plugin:log|log')).toEqual([])
+    } finally {
+      vi.doUnmock('../../src/stores/mockBackend.js')
+    }
+  })
+})
