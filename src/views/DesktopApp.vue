@@ -220,6 +220,7 @@ import {
   homeDir,
   isWindowMaximized,
   minimizeWindow,
+  logToApp,
   openDialogWindow,
   openExternal,
   openImageWindow,
@@ -1179,9 +1180,27 @@ function serveDialog(kind, { ground, props: propsFor, onResult, forget = null })
     else service.stops.push(stop)
   }
 
-  collect(watchEffect(() => announceDialogProps(kind, propsFor())))
-  const failed = (err) => console.warn('[app] the dialog window will not be answered:', err)
-  watchDialogHello(kind, () => announceDialogProps(kind, propsFor())).then(collect, failed)
+  /* A getter that throws is logged and then thrown on, since `watchEffect`
+     would otherwise swallow it into a console nobody reads, and a dialog whose
+     props cannot be computed is a window drawn on its own fallbacks with no
+     record of why (smetana-j4wk). */
+  const announced = () => {
+    let props
+    try {
+      props = propsFor()
+    } catch (err) {
+      logToApp('error', `[app] dialog ${kind}: its props could not be computed: ${err?.stack ?? err}`)
+      throw err
+    }
+    announceDialogProps(kind, props)
+  }
+  logToApp('info', `[app] dialog ${kind}: open requested`)
+  collect(watchEffect(announced))
+  const failed = (err) => {
+    console.warn('[app] the dialog window will not be answered:', err)
+    logToApp('warn', `[app] dialog ${kind}: will not be answered: ${err}`)
+  }
+  watchDialogHello(kind, announced).then(collect, failed)
   /* Guarded by the service's own flag rather than by the unlisten alone, and
      that is what makes the one distinction this app now rests on a fact instead
      of a race. Rust answers **every** destroyed dialog window with
@@ -2320,7 +2339,16 @@ const openRun = async (scopeValue) => {
      looking at the toggle. Together rather than in sequence: neither answer
      depends on the other, and the toggle's own late-answer watcher is what makes
      the order stop mattering. */
-  await Promise.all([loadBranches(activePath.value), loadBrowserTools(activePath.value)])
+  /* Caught and logged rather than thrown on: the window is already up by now,
+     and the dialog copes with a branch list or a browser answer that never came
+     — while a rejection out of a click handler goes nowhere anybody can read
+     (smetana-j4wk). */
+  try {
+    await Promise.all([loadBranches(activePath.value), loadBrowserTools(activePath.value)])
+  } catch (err) {
+    console.warn('[app] the run dialog could not load its branches or browser tools:', err)
+    logToApp('warn', `[app] dialog run: branches or browser tools did not load: ${err?.stack ?? err}`)
+  }
 }
 
 /* Why the live-check toggle cannot be switched on, or '' when it can. Only for

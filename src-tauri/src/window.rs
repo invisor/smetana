@@ -1001,8 +1001,22 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
     let label = format!("{DIALOG_PREFIX}{kind}");
 
     if let Some(window) = app.get_webview_window(&label) {
+        // A window that exists and was never shown is the trap the page's own
+        // comments name — "a second press focused a window nobody could see".
+        // Focusing it is not enough on its own; it is shown first, at the
+        // fallback height, and the log says so (smetana-j4wk).
+        let visible = window.is_visible().unwrap_or(true);
+        log::info!("dialog {kind}: pressed again, the window exists (visible={visible})");
+        match existing_window(visible, is_latched(&kind)) {
+            Existing::Focus => {}
+            Existing::ShowAtFallback => show_unreported(&app, &window, &kind, true),
+            Existing::ShowAsIs => show_unreported(&app, &window, &kind, false),
+        }
         let _ = window.unminimize();
-        return window.set_focus().map_err(|err| err.to_string());
+        return window.set_focus().map_err(|err| {
+            log::warn!("dialog {kind}: could not be focused: {err}");
+            err.to_string()
+        });
     }
 
     // A size somebody dragged this kind of window to, if there is one. It also
@@ -1064,10 +1078,51 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
     // board must not sink behind it on the first click into the board. No main
     // window is not an error, any more than it is there.
     if let Some(main) = app.get_webview_window("main") {
-        builder = builder.parent(&main).map_err(|err| err.to_string())?;
+        builder = builder.parent(&main).map_err(|err| {
+            log::warn!("dialog {kind}: could not be made a child of the main window: {err}");
+            err.to_string()
+        })?;
     }
 
-    let window = builder.build().map_err(|err| err.to_string())?;
+    let window = builder.build().map_err(|err| {
+        log::warn!("dialog {kind}: the window could not be built: {err}");
+        err.to_string()
+    })?;
+    log::info!(
+        "dialog {kind}: built hidden at {built_width}x{built_height} ({})",
+        if kept.is_some() { "remembered size" } else { "fitted, waiting for the page to measure" }
+    );
+
+    // The safety net under the one call that ever shows a dialog window. The
+    // page's first `dialog_window_size` is what shows it, and every failure
+    // upstream of that call — a guest that threw, a measurement that read 0, a
+    // size call that errored — used to end in a window nobody could see and no
+    // word anywhere (smetana-j4wk: the run dialog on Linux). So after a
+    // deadline a window still hidden is shown anyway, at a plausible height,
+    // and the log says it had to be. A report that arrives later still sizes
+    // it; it is simply no longer the first paint, so it is not re-centred.
+    //
+    // The handle is held rather than looked up by label: a window closed and
+    // reopened inside the deadline is a different window with a deadline of its
+    // own, and this one answers errors for the one that is gone.
+    let deadline_window = window.clone();
+    let deadline_app = app.clone();
+    let deadline_kind = kind.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(SHOW_DEADLINE).await;
+        let Ok(visible) = deadline_window.is_visible() else {
+            return;
+        };
+        if visible {
+            return;
+        }
+        log::warn!(
+            "dialog {deadline_kind}: no size report after {}s, showing it at the fallback height",
+            SHOW_DEADLINE.as_secs()
+        );
+        let resize = !is_latched(&deadline_kind);
+        show_unreported(&deadline_app, &deadline_window, &deadline_kind, resize);
+    });
 
     let app_handle = app.clone();
     let channel = format!("dialog:result:{kind}");
@@ -1221,6 +1276,87 @@ const MIN_DIALOG_HEIGHT: f64 = 120.0;
 /// buttons are; past this the page scrolls its own body.
 const HEIGHT_CEILING: f64 = 0.9;
 
+/// How long a freshly built dialog window may stay hidden waiting for the page
+/// to report its height before Rust shows it anyway (smetana-j4wk). Long enough
+/// that a page that is merely slow — three IPC hops for its props, a
+/// `FIRST_PAINT_WAIT` of 250 ms — reports first on every machine this app has
+/// been measured on, and short enough that a press which went wrong still reads
+/// as a press that did something.
+const SHOW_DEADLINE: Duration = Duration::from_secs(2);
+
+/// The height a dialog window is shown at when the page never said how tall it
+/// is. Unlike `PROVISIONAL_HEIGHT` this one is seen, so it is a height a dialog
+/// is readable at rather than merely a height to build with — and the window is
+/// resizable, so a wrong guess costs a drag, where no window at all cost the
+/// feature.
+const FALLBACK_HEIGHT: f64 = 480.0;
+
+/// The height `show_unreported` gives a window, under the same ceiling
+/// `dialog_window_size` applies to a measured one and over the same floor.
+/// `None` is a monitor that would not say how tall it is, which leaves the
+/// fallback as it is.
+fn fallback_height(monitor_height: Option<f64>) -> f64 {
+    let ceiling = monitor_height.map_or(f64::MAX, |height| height * HEIGHT_CEILING);
+    FALLBACK_HEIGHT.min(ceiling).max(MIN_DIALOG_HEIGHT)
+}
+
+/// What a press does to a dialog window of its kind that already exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Existing {
+    /// On screen already: bring it forward, which is all a second press ever did.
+    Focus,
+    /// Never shown, and its height is still the content's to decide: show it at
+    /// the fallback height, then bring it forward.
+    ShowAtFallback,
+    /// Never shown, and opened at a size somebody chose by hand: show it at that
+    /// size. Resizing a latched window is the one thing `dialog_window_size`
+    /// refuses, and a safety net has no business doing what the ordinary path
+    /// will not.
+    ShowAsIs,
+}
+
+/// The decision behind a second press, pure so that a test can reach it. Before
+/// smetana-j4wk every press on an existing window was `Focus`, which on a
+/// window that was never shown focused something nobody could see.
+fn existing_window(visible: bool, latched: bool) -> Existing {
+    match (visible, latched) {
+        (true, _) => Existing::Focus,
+        (false, false) => Existing::ShowAtFallback,
+        (false, true) => Existing::ShowAsIs,
+    }
+}
+
+/// Shows a dialog window the page never showed: at the fallback height unless
+/// `resize` is false, centred over the main window, and on screen. Every step
+/// that fails is logged and the rest are still tried — the point of this path
+/// is that the window ends up visible, and a failed resize is no reason to
+/// leave it hidden.
+fn show_unreported(app: &AppHandle, window: &tauri::WebviewWindow, kind: &str, resize: bool) {
+    if resize {
+        let monitor = window.current_monitor().ok().flatten().map(|monitor| {
+            monitor.size().to_logical::<f64>(monitor.scale_factor()).height
+        });
+        let width = window
+            .scale_factor()
+            .ok()
+            .and_then(|scale| window.inner_size().ok().map(|size| size.to_logical::<f64>(scale).width));
+        match width {
+            Some(width) => {
+                let height = fallback_height(monitor);
+                if let Err(err) = window.set_size(tauri::LogicalSize::new(width, height)) {
+                    log::warn!("dialog {kind}: the fallback size could not be set: {err}");
+                }
+            }
+            None => log::warn!("dialog {kind}: its size could not be read, shown as built"),
+        }
+    }
+    center_over_main(app, window);
+    match window.show() {
+        Ok(()) => log::info!("dialog {kind}: shown without a report from the page"),
+        Err(err) => log::warn!("dialog {kind}: could not be shown: {err}"),
+    }
+}
+
 /// What `dialog_window_size` answers: whether this window's size is the
 /// person's now.
 ///
@@ -1282,10 +1418,18 @@ pub fn dialog_window_size(
     // The width is the window's own rather than the registry's: this side is
     // told a height and nothing else, and re-sending a width would be a second
     // opinion about a number only one side holds.
-    let scale = window.scale_factor().map_err(|err| err.to_string())?;
+    // Every error this function can return is also written to the log, prefixed
+    // with the kind: on the first paint each one is a window that stays hidden,
+    // and the page's own record of it is a `null` in a console nobody can read
+    // (smetana-j4wk).
+    let failed = |what: &str, err: tauri::Error| {
+        log::warn!("dialog {kind}: {what} failed while sizing (first paint: {first_paint}): {err}");
+        err.to_string()
+    };
+    let scale = window.scale_factor().map_err(|err| failed("scale_factor", err))?;
     let inner = window
         .inner_size()
-        .map_err(|err| err.to_string())?
+        .map_err(|err| failed("inner_size", err))?
         .to_logical::<f64>(scale);
 
     // A window somebody has given a size to is not sized again, ever. The page
@@ -1306,7 +1450,14 @@ pub fn dialog_window_size(
             inner.width,
             height_to_set(height, inner.height, viewport, ceiling),
         );
-        window.set_size(want).map_err(|err| err.to_string())?;
+        window.set_size(want).map_err(|err| failed("set_size", err))?;
+        if first_paint {
+            log::info!(
+                "dialog {kind}: first report, content {height} viewport {viewport}, set to {}x{}",
+                want.width.round(),
+                want.height.round()
+            );
+        }
 
         // What we asked for and what the window came to, both recorded, and
         // `resize_is_the_hand` says why it takes two. The request says whether
@@ -1336,7 +1487,10 @@ pub fn dialog_window_size(
     if first_paint {
         center_over_main(&app, &window);
     }
-    window.show().map_err(|err| err.to_string())?;
+    window.show().map_err(|err| failed("show", err))?;
+    if first_paint {
+        log::info!("dialog {kind}: shown by the page's first report (latched: {latched})");
+    }
     Ok(DialogSized { latched })
 }
 
@@ -1729,8 +1883,50 @@ mod tests {
         show_event, tab_query, take_show, window_chrome, window_title, COMPARE_LABEL,
         DialogWindowState, IMAGE_LABEL, SETTINGS_LABEL,
     };
+    use super::{
+        existing_window, fallback_height, Existing, FALLBACK_HEIGHT, HEIGHT_CEILING,
+        MIN_DIALOG_HEIGHT,
+    };
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn a_window_the_page_never_sized_is_shown_at_the_fallback_on_a_monitor_with_room() {
+        assert_eq!(fallback_height(Some(1080.0)), FALLBACK_HEIGHT);
+    }
+
+    #[test]
+    fn a_monitor_that_would_not_say_its_height_leaves_the_fallback_alone() {
+        assert_eq!(fallback_height(None), FALLBACK_HEIGHT);
+    }
+
+    #[test]
+    fn the_fallback_stays_under_the_same_ceiling_a_measured_height_does() {
+        let small = 400.0;
+        assert_eq!(fallback_height(Some(small)), small * HEIGHT_CEILING);
+    }
+
+    #[test]
+    fn the_fallback_never_goes_below_the_windows_own_floor() {
+        assert_eq!(fallback_height(Some(50.0)), MIN_DIALOG_HEIGHT);
+    }
+
+    #[test]
+    fn a_second_press_on_a_visible_window_only_brings_it_forward() {
+        assert_eq!(existing_window(true, false), Existing::Focus);
+        assert_eq!(existing_window(true, true), Existing::Focus);
+    }
+
+    #[test]
+    fn a_second_press_on_a_window_never_shown_shows_it() {
+        // smetana-j4wk: this used to focus a window nobody could see.
+        assert_eq!(existing_window(false, false), Existing::ShowAtFallback);
+    }
+
+    #[test]
+    fn a_hidden_window_at_a_size_somebody_chose_is_shown_without_resizing() {
+        assert_eq!(existing_window(false, true), Existing::ShowAsIs);
+    }
 
     /// The two words this command may answer with, named here in full because
     /// they are a contract with `src/components/shell/windowChrome.js` and
