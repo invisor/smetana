@@ -242,6 +242,7 @@ export function combine(device, server) {
       runSettings: server.project?.runSettings,
       agents: server.project?.agents,
       columnOrder: server.project?.columnOrder,
+      kanbanSync: server.project?.kanbanSync,
       usedAt: server.project?.usedAt
     })
   }

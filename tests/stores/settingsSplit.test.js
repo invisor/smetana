@@ -270,6 +270,7 @@ describe('putting the halves together', () => {
     expect(out.activeProject).toBe('/a')
     expect(out.project.selectedTask).toBe('a-1')
     expect(out.project.runSettings).toEqual({ mode: 'solo' })
+    expect(out.project.kanbanSync).toEqual(server.project.kanbanSync)
   })
 
   it('lays the server\'s theme and density over the device\'s font size', () => {

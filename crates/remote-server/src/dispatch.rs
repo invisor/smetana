@@ -305,6 +305,10 @@ calls! {
         let Some(sync) = s.ctx()?.kanban_sync() else { return plain(crate::tracker::sync::State::default()); };
         plain(sync.state(&a.project).await)
     };
+    KanbanSyncPresence = "kanban_sync_presence" { projects: Vec<String> } => |s, c, a| {
+        if let Some(sync) = s.ctx()?.kanban_sync() { sync.presence(c.id, a.projects).await; }
+        plain(())
+    };
     RunStart = "run_start" { project: String, settings: RunSettings }
         => |s, c, a| answer(crate::runs::commands::start(&s.runs, a.project, a.settings).await);
     RunStop = "run_stop" { token: u64 } => |s, c, a| answer(crate::runs::commands::stop(&s.runs, a.token).await);
@@ -518,7 +522,7 @@ impl Dispatch for Services {
         match cmd {
             "server_restart" | "server_work" | "server:restart-deferred" => self.gateway.is_some(),
             "server_health" => self.ctx.is_some(),
-            "kanban_sync_pull" | "kanban_sync_state" => self.ctx.as_ref().is_some_and(|ctx| ctx.kanban_sync().is_some()),
+            "kanban_sync_pull" | "kanban_sync_state" | "kanban_sync_presence" => self.ctx.as_ref().is_some_and(|ctx| ctx.kanban_sync().is_some()),
             _ => true,
         }
     }
@@ -548,6 +552,7 @@ impl Dispatch for Services {
     fn client_gone<'a>(&'a self, caller: &'a Caller) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             let _ = crate::terminal::commands::plain::forget_client(&self.terminal, caller.id).await;
+            if let Some(sync) = self.ctx.as_ref().and_then(|ctx| ctx.kanban_sync()) { sync.client_gone(caller.id).await; }
         })
     }
 }

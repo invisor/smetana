@@ -300,6 +300,7 @@ pub const SERVER_COMMANDS: &[&str] = &[
     "server_work",
     "kanban_sync_pull",
     "kanban_sync_state",
+    "kanban_sync_presence",
 ];
 
 /// The server commands that exist only on the server: the desktop app registers no Tauri command of
@@ -334,6 +335,7 @@ pub const SERVER_ONLY_COMMANDS: &[&str] = &[
     "server_work",
     "kanban_sync_pull",
     "kanban_sync_state",
+    "kanban_sync_presence",
 ];
 
 /// Every event a desktop device may listen to: the phone's list (first), then the rest of what

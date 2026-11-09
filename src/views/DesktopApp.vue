@@ -58,7 +58,7 @@ import {
   toggleChanges
 } from '../components/git/changesFold.js'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
-import { initKanbanSync, readKanbanSync, pullKanbanSync, syncProblem, kanbanSyncState } from '../stores/kanbanSync.js'
+import { initKanbanSync, readKanbanSync, pullKanbanSync, publishOpenProjects, syncProblems, kanbanSyncState } from '../stores/kanbanSync.js'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
@@ -6945,9 +6945,8 @@ watch(
    background and are not killed — a project switch that killed another
    project's work would be the same class of loss that `stale` guards
    against in the files layer. */
-onMounted(() => initKanbanSync().then(() => readKanbanSync(activePath.value)))
+watch(() => [...settings.openProjects], (projects) => publishOpenProjects(projects), { immediate: true })
 watch(activePath, (path) => {
-  initKanbanSync().then(() => readKanbanSync(path))
   loadSessions(path)
   loadHead(path)
   loadConfig(path)
@@ -6977,10 +6976,10 @@ watch(
   },
   { immediate: true }
 )
-const kanbanSyncProblem = computed(() => {
+const kanbanSyncProblems = computed(() => {
   // The dependency ensures a late event updates the already open board.
   void kanbanSyncState.projects[kanbanSyncState.keys[activePath.value] ?? activePath.value]
-  return syncProblem(activePath.value)
+  return syncProblems(activePath.value)
 })
 
 /* The Sessions tab reads the disk when it is opened, and again whenever the
@@ -8394,11 +8393,12 @@ const toastStackStyle = {
          both are broken. -->
     <div :style="toastStackStyle">
       <Toast
-        v-if="kanbanSyncProblem"
+        v-for="problem in kanbanSyncProblems"
+        :key="problem.operation"
         tone="error"
         :closable="false"
-        :title="`Kanban ${kanbanSyncProblem.operation} failed`"
-        :description="kanbanSyncProblem.stderr || (kanbanSyncProblem.timedOut ? 'Command timed out.' : `Exit code ${kanbanSyncProblem.code ?? 'unknown'}`)"
+        :title="`Kanban ${problem.operation} failed`"
+        :description="problem.stderr || (problem.timedOut ? 'Command timed out.' : `Exit code ${problem.code ?? 'unknown'}`)"
       />
       <Toast
         v-if="trackerState.lastError"

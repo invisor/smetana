@@ -1,21 +1,34 @@
 import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { onReconnect } from './connection.js'
+import { connection, onReconnect } from './connection.js'
 
 export const kanbanSyncState = reactive({ projects: {}, keys: {} })
 let initialization = null
-let eventSerial = 0
+const eventSerial = {}
+let openProjects = []
+let openTarget = null
+
+export async function publishOpenProjects(projects) {
+  openProjects = [...projects]
+  openTarget = connection.target
+  try {
+    await invoke('kanban_sync_presence', { projects: openProjects })
+  } catch (error) {
+    console.warn('[kanban sync] could not publish open projects:', error)
+  }
+}
 
 export function initKanbanSync() {
   if (initialization) return initialization
   initialization = listen('kanban:sync', ({ payload }) => {
     if (payload?.project) {
-      eventSerial += 1
+      eventSerial[payload.project] = (eventSerial[payload.project] ?? 0) + 1
       kanbanSyncState.projects[payload.project] = payload
     }
   }).then(() => {
     onReconnect(() => {
+      if (connection.target === openTarget) publishOpenProjects(openProjects)
       for (const project of Object.keys(kanbanSyncState.projects)) readKanbanSync(project)
     })
   }).catch((error) => {
@@ -27,12 +40,12 @@ export function initKanbanSync() {
 
 export async function readKanbanSync(project) {
   if (!project) return
-  const startedAt = eventSerial
+  const startedAt = { ...eventSerial }
   try {
     const state = await invoke('kanban_sync_state', { project })
     if (state?.project) {
       kanbanSyncState.keys[project] = state.project
-      if (startedAt === eventSerial || !kanbanSyncState.projects[state.project]) {
+      if ((startedAt[state.project] ?? 0) === (eventSerial[state.project] ?? 0) || !kanbanSyncState.projects[state.project]) {
         kanbanSyncState.projects[state.project] = state
       }
     }
@@ -52,7 +65,7 @@ export async function pullKanbanSync(project) {
   }
 }
 
-export function syncProblem(project) {
+export function syncProblems(project) {
   const state = kanbanSyncState.projects[kanbanSyncState.keys[project] ?? project]
-  return state?.pullError ?? state?.pushError ?? null
+  return [state?.pullError, state?.pushError].filter(Boolean)
 }

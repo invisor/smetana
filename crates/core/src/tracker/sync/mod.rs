@@ -32,6 +32,26 @@ pub struct State {
 pub struct Handle(Weak<Coordinator>);
 
 impl Handle {
+    pub async fn presence(&self, client: u64, projects: Vec<String>) {
+        if let Some(coordinator) = self.0.upgrade() {
+            let roots = projects
+                .into_iter()
+                .filter(|path| !path.trim().is_empty() && path.len() <= 4096)
+                .take(crate::settings::model::MAX_OPEN)
+                .map(|path| canonical(Path::new(&path)))
+                .collect();
+            coordinator.clients.lock().await.insert(client, roots);
+            coordinator.reconcile().await;
+        }
+    }
+
+    pub async fn client_gone(&self, client: u64) {
+        if let Some(coordinator) = self.0.upgrade() {
+            coordinator.clients.lock().await.remove(&client);
+            coordinator.reconcile().await;
+        }
+    }
+
     pub fn enabled(&self, project: &str) -> bool {
         let Some(coordinator) = self.0.upgrade() else {
             return false;
@@ -129,6 +149,7 @@ pub struct Coordinator {
     tracker: TrackerHandle,
     runner: Arc<dyn command::Runner>,
     projects: Mutex<HashMap<PathBuf, Arc<ProjectSync>>>,
+    clients: Mutex<HashMap<u64, Vec<PathBuf>>>,
     states: Arc<Mutex<HashMap<PathBuf, State>>>,
 }
 
@@ -148,6 +169,7 @@ pub fn start(ctx: Context, tracker: TrackerHandle) -> Arc<Coordinator> {
         tracker,
         runner: Arc::new(command::Shell),
         projects: Mutex::new(HashMap::new()),
+        clients: Mutex::new(HashMap::new()),
         states: Arc::new(Mutex::new(HashMap::new())),
     });
     ctx.install_kanban_sync(Handle(Arc::downgrade(&coordinator)));
@@ -185,6 +207,23 @@ impl Coordinator {
                         wanted.insert(key, config);
                     }
                     Err(reason) => invalid.push((key, reason)),
+                }
+            }
+        }
+        for paths in self.clients.lock().await.values() {
+            for key in paths {
+                let config = config_for(&settings, key).cloned().unwrap_or_default();
+                if config.enabled {
+                    match config.check() {
+                        Ok(()) => {
+                            wanted.insert(key.clone(), config);
+                        }
+                        Err(reason) => {
+                            if !invalid.iter().any(|(old, _)| old == key) {
+                                invalid.push((key.clone(), reason));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -288,7 +327,8 @@ impl Coordinator {
                 let managed = settings
                     .open_projects
                     .iter()
-                    .any(|path| canonical(Path::new(path)) == key);
+                    .any(|path| canonical(Path::new(path)) == key)
+                    || self.clients.lock().await.values().any(|paths| paths.contains(&key));
                 let runtime = ProjectSync::new(
                     self.ctx.clone(),
                     self.tracker.clone(),
@@ -508,6 +548,9 @@ impl ProjectSync {
         if before != after {
             self.policy.lock().await.changed(Instant::now());
         }
+        // Tracker worker writes call `Handle::changed`, which scans under this
+        // lock. Release it before asking that worker for Current or Resync.
+        drop(_scan_guard);
         if result.is_ok() {
             if let Ok((Some(selected), _, _)) = super::commands::current(&self.tracker).await {
                 if canonical(&selected) == self.root {
@@ -754,6 +797,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn closing_one_of_two_desktops_keeps_the_other_projects_watcher() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), release: None });
+        let (dir, runtime) = runtime(fake.clone());
+        let root = runtime.root.to_string_lossy().into_owned();
+        let mut settings = file::load(&dir.path().join("settings.json")).0;
+        settings.open_projects = vec![root.clone()];
+        file::save(&dir.path().join("settings.json"), &settings).unwrap();
+        let coordinator = Arc::new(Coordinator {
+            ctx: runtime.ctx.clone(), tracker: runtime.tracker.clone(), runner: fake,
+            projects: Mutex::new(HashMap::new()), clients: Mutex::new(HashMap::new()),
+            states: runtime.states.clone(),
+        });
+        let handle = Handle(Arc::downgrade(&coordinator));
+        handle.presence(1, vec![root.clone()]).await;
+        handle.presence(2, vec![root.clone()]).await;
+        assert!(coordinator.projects.lock().await[&runtime.root].open.load(Ordering::SeqCst));
+        settings.open_projects.clear();
+        file::save(&dir.path().join("settings.json"), &settings).unwrap();
+        handle.presence(1, vec![]).await;
+        assert!(coordinator.projects.lock().await[&runtime.root].open.load(Ordering::SeqCst));
+        handle.client_gone(2).await;
+        assert!(!coordinator.projects.lock().await.contains_key(&runtime.root));
+    }
+
+    #[tokio::test]
     async fn pull_waits_for_a_started_scan_before_replacing_its_baseline() {
         let fake = Arc::new(Fake { calls: AtomicUsize::new(0), release: None });
         let (_dir, runtime) = runtime(fake.clone());
@@ -765,6 +833,26 @@ mod tests {
         drop(scan);
         pending.await.unwrap().unwrap();
         assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn tracker_worker_can_scan_while_answering_pull_resync() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), release: None });
+        let (_dir, original) = runtime(fake.clone());
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let runtime = ProjectSync::new(
+            original.ctx.clone(), TrackerHandle(sender), original.root.clone(),
+            original.config.lock().await.clone(), fake, original.states.clone(), true,
+        );
+        let scanning = runtime.clone();
+        let worker = tokio::spawn(async move {
+            if let Some(super::super::service::Request::Current(reply)) = receiver.recv().await {
+                observe::scan(&scanning).await;
+                drop(reply);
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(2), runtime.pull_once()).await.unwrap().unwrap();
+        worker.await.unwrap();
     }
 
     #[tokio::test(start_paused = true)]
@@ -780,6 +868,7 @@ mod tests {
             tracker: runtime.tracker.clone(),
             runner: fake,
             projects: Mutex::new(HashMap::from([(runtime.root.clone(), runtime.clone())])),
+            clients: Mutex::new(HashMap::new()),
             states: runtime.states.clone(),
         });
         let handle = Handle(Arc::downgrade(&coordinator));

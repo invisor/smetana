@@ -745,6 +745,7 @@ fn server_replies(map: &mut BTreeMap<&'static str, Vec<Value>>) {
 
     map.insert("tracker_resync", all(&snapshots()));
     map.insert("kanban_sync_pull", nothing());
+    map.insert("kanban_sync_presence", nothing());
     map.insert("kanban_sync_state", vec![json_of(&smetana_core::tracker::sync::State {
         project: "/work/smetana".into(),
         pull_error: Some(smetana_core::tracker::sync::command::Error {

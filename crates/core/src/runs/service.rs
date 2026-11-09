@@ -1006,7 +1006,9 @@ async fn drive(
         run.session = None;
         say(&run);
 
-        let Some((issues, source)) = board(&tracker, &root).await else {
+        let Some((issues, source)) = board_for_decision(
+            &tracker, &root, kanban_sync.as_ref(), &run.project, false,
+        ).await else {
             unreadable += 1;
             account.journal.say(&journal::unreadable_board(
                 journal::Read::Decision,
@@ -1130,7 +1132,9 @@ async fn drive(
                     // batch before and is only replaced below.
                     run.advance(RunState::Deciding);
                     say(&run);
-                    let Some((issues, source)) = fresh_board(&tracker, &root).await else {
+                    let Some((issues, source)) = board_for_decision(
+                        &tracker, &root, kanban_sync.as_ref(), &run.project, true,
+                    ).await else {
                         // `continue` is safe here and only here: `rested_after`
                         // is already set, so the lap that follows takes no
                         // second pause for this boundary, and `previous` is
@@ -1286,7 +1290,6 @@ async fn drive(
         let session = match spawn_batch(
             &transport,
             &run,
-            kanban_sync.as_ref(),
             tasks,
             &current_agent,
             &account.reports,
@@ -3033,6 +3036,29 @@ async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64) -> bool {
     rx.await.unwrap_or(false)
 }
 
+async fn pull_for_run(sync: Option<&crate::tracker::sync::Handle>, project: &str) {
+    if let Some(sync) = sync.filter(|sync| sync.enabled(project)) {
+        if let Err(error) = sync.pull(project).await {
+            log::warn!("kanban sync before run lead in {project}: {}", error.stderr);
+        }
+    }
+}
+
+async fn board_for_decision(
+    tracker: &TrackerHandle,
+    root: &Path,
+    sync: Option<&crate::tracker::sync::Handle>,
+    project: &str,
+    fresh: bool,
+) -> Option<(Vec<crate::tracker::model::Issue>, BoardSource)> {
+    pull_for_run(sync, project).await;
+    if fresh {
+        fresh_board(tracker, root).await
+    } else {
+        board(tracker, root).await
+    }
+}
+
 /// One batch. `agent` is the id from `settings.json`, read when the run started;
 /// what actually spawns is still `terminal_create`'s answer, the same as for
 /// every other session, so the fallback to whatever is installed lives in one
@@ -3047,7 +3073,6 @@ async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64) -> bool {
 async fn spawn_batch(
     transport: &RunTransport,
     run: &Run,
-    kanban_sync: Option<&crate::tracker::sync::Handle>,
     tasks: Option<u8>,
     agent: &str,
     reports: &Path,
@@ -3055,15 +3080,6 @@ async fn spawn_batch(
     continuation: Option<crate::agents::RunContinuation>,
     remove_worktrees: bool,
 ) -> Result<u64, String> {
-    if let Some(sync) = kanban_sync.filter(|sync| sync.enabled(&run.project)) {
-        if let Err(error) = sync.pull(&run.project).await {
-            log::warn!(
-                "kanban sync before run lead in {}: {}",
-                run.project,
-                error.stderr
-            );
-        }
-    }
     let (tx, rx) = oneshot::channel();
     let settings = RunSettings { max_parallel_tasks: tasks, ..run.settings.clone() };
     // The directory and this batch's number ride with the settings for the same
@@ -3492,6 +3508,57 @@ async fn await_exit(transport: &RunTransport, session: u64) -> Exit {
 mod tests {
     use super::*;
     use crate::runs::model::{RunMode, RunScope};
+
+    struct SyncSink;
+    impl crate::context::Sink for SyncSink {
+        fn emit(&self, _: &str, _: serde_json::Value) {}
+        fn push(&self, _: crate::remote::push::Message) {}
+    }
+
+    #[tokio::test]
+    async fn remote_task_is_seen_before_the_run_can_decide_to_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let project = root.to_string_lossy().into_owned();
+        let mut settings = crate::settings::model::Settings::default();
+        settings.projects.insert(project.clone(), crate::settings::model::ProjectState {
+            kanban_sync: crate::settings::model::KanbanSync {
+                enabled: true, pull_command: "printf x >> remote-visible".into(), ..Default::default()
+            }, ..Default::default()
+        });
+        crate::settings::file::save(&dir.path().join("settings.json"), &settings).unwrap();
+        let ctx = crate::context::Context::new(Err("x".into()), Ok(dir.path().to_path_buf()),
+            Err("x".into()), None, std::sync::Arc::new(SyncSink));
+        let (sender, mut receiver) = mpsc::channel(4);
+        let tracker = TrackerHandle(sender);
+        let _coordinator = crate::tracker::sync::start(ctx.clone(), tracker.clone());
+        let remote = root.join("remote-visible");
+        let worker = tokio::spawn(async move {
+            while let Some(request) = receiver.recv().await {
+                match request {
+                    TrackerRequest::Current(reply) => drop(reply),
+                    TrackerRequest::BoardAt { reply, .. } => {
+                        let issues = if remote.exists() { vec![crate::tracker::model::Issue {
+                            id: "remote-1".into(), status: "open".into(), ..Default::default()
+                        }] } else { vec![] };
+                        let _ = reply.send(Ok((issues, BoardSource::Direct)));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let sync = ctx.kanban_sync().unwrap().clone();
+        let (issues, _) = board_for_decision(&tracker, &root, Some(&sync), &project, false).await.unwrap();
+        let snapshot = queue::snapshot(&issues, &RunScope::Queue, None);
+        assert!(matches!(queue::next_action(&snapshot, None, 0, 10, LastBatch::Completed, false), Action::Run(_)));
+        assert_eq!(std::fs::read_to_string(root.join("remote-visible")).unwrap(), "x");
+        drop(tracker);
+        drop(ctx);
+        drop(_coordinator);
+        worker.abort();
+    }
 
     fn settings(scope: RunScope) -> RunSettings {
         RunSettings {
