@@ -1,5 +1,5 @@
 {
   "payload": [
-    {"project":"/work/smetana","pullError":{"code":1,"operation":"pull","stderr":"remote unavailable","timedOut":false},"pushError":null}
+    {"project":"/work/smetana","pullError":{"code":1,"operation":"pull","stderr":"remote unavailable","timedOut":false},"pushError":null,"eventOperation":"pull"}
   ]
 }

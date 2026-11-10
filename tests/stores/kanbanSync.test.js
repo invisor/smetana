@@ -78,4 +78,22 @@ describe('project-addressed Kanban sync state', () => {
     expect(sync.syncProblems('/a')).toEqual([])
     expect(sync.syncProblems('/canonical/b')).toEqual([error])
   })
+
+  it('numbers a new failure even when the diagnostic is unchanged, without clearing sync state', async () => {
+    const { ipc, emit } = await loadStores()
+    const sync = await import('../../src/stores/kanbanSync.js')
+    await sync.initKanbanSync()
+    const error = { operation: 'pull', code: 7, timedOut: false, stderr: 'offline' }
+    const failed = { project: '/canonical/a', pullError: error, pushError: null, eventOperation: 'pull' }
+    await emit('kanban:sync', failed)
+    expect(sync.syncNotices('/canonical/a')[0].event).toBe('/canonical/a:pull:1')
+    sync.dismissSyncNotice('/canonical/a', sync.syncNotices('/canonical/a')[0])
+    expect(sync.syncNotices('/canonical/a')).toEqual([])
+    ipc.on('kanban_sync_state', { project: '/canonical/a', pullError: error, pushError: null })
+    await sync.readKanbanSync('/canonical/a')
+    expect(sync.syncNotices('/canonical/a')).toEqual([])
+    await emit('kanban:sync', failed)
+    expect(sync.syncNotices('/canonical/a')[0].event).toBe('/canonical/a:pull:2')
+    expect(sync.syncProblems('/canonical/a')).toEqual([error])
+  })
 })

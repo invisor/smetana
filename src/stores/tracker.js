@@ -74,7 +74,8 @@ export const trackerState = reactive({
      reset is worse than the sentence alone — which is written to hold up
      without one (`views/folderAccess.js`). */
   folderAccessRepair: 'unavailable',
-  lastError: null
+  lastError: null,
+  lastErrorSeq: 0
 })
 
 export const issueById = (id) => trackerState.issues.get(id)
@@ -272,6 +273,7 @@ const ERRORS = {
 function report(kind, error) {
   console.error(`[tracker] ${kind} failed:`, error)
   trackerState.lastError = ERRORS[kind]
+  trackerState.lastErrorSeq++
 }
 
 function applySnapshot(snapshot) {
@@ -375,6 +377,7 @@ export async function repairTracker() {
        console line is `report`'s job everywhere else, so it is kept by hand. */
     console.error('[tracker] repair failed:', err)
     const said = lastDiagnosticLine(err)
+    trackerState.lastErrorSeq++
     trackerState.lastError = {
       ...ERRORS.repair,
       description: said ? `${said} ${ERRORS.repair.description}` : ERRORS.repair.description
@@ -436,6 +439,7 @@ export async function resetFolderAccess() {
        `report`'s job everywhere else, so it is kept by hand. */
     console.error('[tracker] resetting the folder permission failed:', err)
     const said = lastDiagnosticLine(err)
+    trackerState.lastErrorSeq++
     trackerState.lastError = {
       ...ERRORS.access,
       description: said ? `${said} ${ERRORS.access.description}` : ERRORS.access.description

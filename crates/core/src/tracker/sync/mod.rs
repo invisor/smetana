@@ -26,6 +26,8 @@ pub struct State {
     pub project: String,
     pub pull_error: Option<command::Error>,
     pub push_error: Option<command::Error>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_operation: Option<String>,
 }
 
 #[derive(Clone)]
@@ -117,6 +119,7 @@ impl Handle {
                             stderr: reason.into(),
                         }),
                         push_error: None,
+                        event_operation: None,
                     };
                 }
             }
@@ -314,11 +317,12 @@ impl Coordinator {
                     stderr: reason.into(),
                 }),
                 push_error: None,
+                event_operation: None,
             };
             let mut states = self.states.lock().await;
             if states.get(&key) != Some(&state) {
                 states.insert(key, state.clone());
-                self.ctx.emit(EVENT, &state);
+                self.ctx.emit(EVENT, &State { event_operation: Some("pull".into()), ..state });
             }
         }
     }
@@ -345,6 +349,7 @@ impl Coordinator {
                     project: key.to_string_lossy().into_owned(),
                     pull_error: Some(failure.clone()),
                     push_error: None,
+                    event_operation: Some("pull".into()),
                 },
             );
             return Err(failure);
@@ -453,13 +458,21 @@ impl ProjectSync {
         } else {
             &mut state.push_error
         };
-        if *slot != error {
-            *slot = error;
+        let changed = *slot != error;
+        if changed {
+            *slot = error.clone();
             self.states
                 .lock()
                 .await
                 .insert(self.root.clone(), state.clone());
-            self.ctx.emit(EVENT, &*state);
+        }
+        // A second failed command may have the same diagnostic. Its event still
+        // needs to reach the toast, while the stored state stays unchanged.
+        if changed || error.is_some() {
+            self.ctx.emit(EVENT, &State {
+                event_operation: Some(operation.into()),
+                ..state.clone()
+            });
         }
     }
 

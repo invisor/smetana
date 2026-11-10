@@ -76,7 +76,8 @@ export const filesState = reactive({
      compared against. `setClipboard` empties it: a new copy makes what the last
      move consumed beside the point. */
   clipboardSpent: [],
-  lastError: null
+  lastError: null,
+  lastErrorSeq: 0
 })
 
 /* The same function `projects.js` exports as `basename`, kept under this store's
@@ -383,7 +384,10 @@ export async function listDir(dir = '') {
        simply looks like an empty folder, so a short phrase travels outwards and
        `DesktopApp.vue` raises the toast. */
     if (error.kind === 'notFound' && dir && filesState.root === root) forgetVanished(dir)
-    else filesState.lastError = dirErrorText(error)
+    else {
+      filesState.lastError = dirErrorText(error)
+      filesState.lastErrorSeq++
+    }
     return false
   } finally {
     filesState.loading.delete(dir)

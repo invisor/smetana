@@ -72,7 +72,8 @@ export const terminalState = reactive({
   activeId: null,
   ready: false,
   project: null,
-  lastError: null
+  lastError: null,
+  lastErrorSeq: 0
 })
 
 /* Every session the worker holds, by id, reduced to the project it belongs to
@@ -755,6 +756,7 @@ function report(kind, error) {
      entry's own object and being called with it. */
   const cause = ERRORS[error?.kind]
   terminalState.lastError = typeof cause === 'function' ? cause(error.message) : ERRORS[kind]
+  terminalState.lastErrorSeq++
 }
 
 /* The number of the last chunk delivered for the active session. A gap means
@@ -1158,6 +1160,7 @@ export function resumeRefused(record) {
   })
   if (available) return false
   terminalState.lastError = { title: ERRORS.write.title, description: resumeReasonLine(reason) }
+  terminalState.lastErrorSeq++
   return true
 }
 
@@ -1411,6 +1414,7 @@ export async function sendDroppedPaths(id, paths, toText) {
   if (failures.length) {
     console.error('[terminal] dropped files could not be sent to the server:', failures)
     terminalState.lastError = { title: 'Could not send the file', description: failureSentence(failures) }
+    terminalState.lastErrorSeq++
   }
   const text = toText(usable)
   if (text) await send(id, text)

@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 
@@ -9,16 +9,45 @@ const T = {
   warning: { icon: 'triangle-alert', fg: 'var(--attn-loud)' },
   error: { icon: 'x', fg: 'var(--status-failed-fg)' }
 }
+const TOAST_MS = 10000
 
 const props = defineProps({
   tone: { type: String, default: 'info' },
   /* "claude-1 needs you" / "bd-a1b2 · worktree name collision · 4m" */
   title: { type: String, required: true },
   description: { type: String, default: '' },
-  closable: { type: Boolean, default: true }
+  closable: { type: Boolean, default: true },
+  event: { default: null }
 })
 
-defineEmits(['close'])
+const emit = defineEmits(['close', 'expired'])
+const visible = ref(true)
+let timer = null
+
+watch(
+  () => [props.event, props.tone, props.title, props.description],
+  () => {
+    clearTimeout(timer)
+    visible.value = true
+    timer = setTimeout(() => {
+      visible.value = false
+      emit('expired')
+    }, TOAST_MS)
+  },
+  { immediate: true }
+)
+
+function dismiss() {
+  clearTimeout(timer)
+  visible.value = false
+  emit('close')
+}
+
+function onClick(event) {
+  if (event.target.closest('button[aria-label="Dismiss"]')) dismiss()
+}
+
+onUnmounted(() => clearTimeout(timer))
 
 const t = computed(() => T[props.tone] || T.info)
 
@@ -38,7 +67,7 @@ const style = {
 </script>
 
 <template>
-  <div role="status" :style="style">
+  <div v-if="visible" role="status" :style="style" @click.capture="onClick">
     <Icon :name="t.icon" :size="14" :style="{ color: t.fg, marginTop: '2px' }" />
     <div :style="{ flex: 1, minWidth: 0 }">
       <div :style="{ fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-medium)' }">{{ title }}</div>
@@ -54,6 +83,6 @@ const style = {
          corner of the window, so the panel would open over the app's own
          content to name a glyph that reads as itself; `label` still carries the
          accessible name. -->
-    <IconButton v-if="closable" icon="x" label="Dismiss" size="sm" :hint="false" @click="$emit('close')" />
+    <IconButton v-if="closable" icon="x" label="Dismiss" size="sm" :hint="false" />
   </div>
 </template>
