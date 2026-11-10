@@ -1,6 +1,6 @@
 {
   "args": [{"project":"/work/smetana"}],
   "reply": [
-    {"project":"/work/smetana","pullError":{"code":1,"operation":"pull","stderr":"remote unavailable","timedOut":false},"pushError":null}
+    {"project":"/work/smetana","pullError":{"code":1,"operation":"pull","stderr":"remote unavailable","timedOut":false},"pushError":null,"serverSessionId":"contract-session","pullFailureRevision":1,"pushFailureRevision":0}
   ]
 }

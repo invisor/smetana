@@ -752,6 +752,10 @@ fn server_replies(map: &mut BTreeMap<&'static str, Vec<Value>>) {
             operation: "pull".into(), code: Some(1), timed_out: false, stderr: "remote unavailable".into(),
         }),
         push_error: None,
+        server_session_id: "contract-session".into(),
+        pull_failure_revision: 1,
+        push_failure_revision: 0,
+        event_operation: None,
     })]);
     for name in ["tracker_update", "tracker_close", "tracker_reopen"] {
         map.insert(name, vec![json_of(&issue(true)), json_of(&issue(false))]);
@@ -1146,6 +1150,10 @@ fn server_payloads(map: &mut BTreeMap<&'static str, Vec<Value>>) {
             operation: "pull".into(), code: Some(1), timed_out: false, stderr: "remote unavailable".into(),
         }),
         push_error: None,
+        server_session_id: "contract-session".into(),
+        pull_failure_revision: 1,
+        push_failure_revision: 0,
+        event_operation: Some("pull".into()),
     })]);
     map.insert("server:restart-deferred", vec![crate::gateway::deferred_payload(&restart_work())]);
     map.insert(

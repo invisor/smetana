@@ -20,12 +20,44 @@ use crate::settings::{file, model::KanbanSync};
 
 pub const EVENT: &str = "kanban:sync";
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct State {
     pub project: String,
     pub pull_error: Option<command::Error>,
     pub push_error: Option<command::Error>,
+    #[serde(default)]
+    pub server_session_id: String,
+    #[serde(default)]
+    pub pull_failure_revision: u64,
+    #[serde(default)]
+    pub push_failure_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_operation: Option<String>,
+}
+
+fn server_session_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| format!("{:032x}", rand::random::<u128>()))
+}
+
+fn next_failure_revision() -> u64 {
+    static REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    REVISION.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            project: String::new(),
+            pull_error: None,
+            push_error: None,
+            server_session_id: server_session_id().into(),
+            pull_failure_revision: 0,
+            push_failure_revision: 0,
+            event_operation: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -108,16 +140,30 @@ impl Handle {
                     };
                 }
                 if let Err(reason) = config.check() {
-                    return State {
-                        project: key.to_string_lossy().into_owned(),
-                        pull_error: Some(command::Error {
-                            operation: "pull".into(),
-                            code: None,
-                            timed_out: false,
-                            stderr: reason.into(),
-                        }),
-                        push_error: None,
+                    let error = command::Error {
+                        operation: "pull".into(),
+                        code: None,
+                        timed_out: false,
+                        stderr: reason.into(),
                     };
+                    let mut states = coordinator.states.lock().await;
+                    if let Some(state) = states.get(&key) {
+                        if state.pull_error.as_ref() == Some(&error) {
+                            return state.clone();
+                        }
+                    }
+                    let state = State {
+                        project: key.to_string_lossy().into_owned(),
+                        pull_error: Some(error),
+                        pull_failure_revision: next_failure_revision(),
+                        ..State::default()
+                    };
+                    states.insert(key, state.clone());
+                    coordinator.ctx.emit(EVENT, &State {
+                        event_operation: Some("pull".into()),
+                        ..state.clone()
+                    });
+                    return state;
                 }
             }
             if let Some(runtime) = coordinator.projects.lock().await.get(&key).cloned() {
@@ -305,20 +351,22 @@ impl Coordinator {
             self.ctx.emit(EVENT, &state);
         }
         for (key, reason) in invalid {
-            let state = State {
-                project: key.to_string_lossy().into_owned(),
-                pull_error: Some(command::Error {
-                    operation: "pull".into(),
-                    code: None,
-                    timed_out: false,
-                    stderr: reason.into(),
-                }),
-                push_error: None,
+            let error = command::Error {
+                operation: "pull".into(),
+                code: None,
+                timed_out: false,
+                stderr: reason.into(),
             };
             let mut states = self.states.lock().await;
-            if states.get(&key) != Some(&state) {
+            if states.get(&key).map_or(true, |state| state.pull_error.as_ref() != Some(&error)) {
+                let state = State {
+                    project: key.to_string_lossy().into_owned(),
+                    pull_error: Some(error),
+                    pull_failure_revision: next_failure_revision(),
+                    ..State::default()
+                };
                 states.insert(key, state.clone());
-                self.ctx.emit(EVENT, &state);
+                self.ctx.emit(EVENT, &State { event_operation: Some("pull".into()), ..state });
             }
         }
     }
@@ -339,12 +387,22 @@ impl Coordinator {
                 timed_out: false,
                 stderr: error.into(),
             };
+            let state = {
+                let mut states = self.states.lock().await;
+                let state = State {
+                    project: key.to_string_lossy().into_owned(),
+                    pull_error: Some(failure.clone()),
+                    pull_failure_revision: next_failure_revision(),
+                    ..State::default()
+                };
+                states.insert(key.clone(), state.clone());
+                state
+            };
             self.ctx.emit(
                 EVENT,
                 &State {
-                    project: key.to_string_lossy().into_owned(),
-                    pull_error: Some(failure.clone()),
-                    push_error: None,
+                    event_operation: Some("pull".into()),
+                    ..state
                 },
             );
             return Err(failure);
@@ -448,18 +506,51 @@ impl ProjectSync {
 
     async fn publish(&self, operation: &str, error: Option<command::Error>) {
         let mut state = self.state.lock().await;
-        let slot = if operation == "pull" {
-            &mut state.pull_error
+        // A newly constructed runtime can replace an invalid configuration
+        // before reconcile ticks. Keep the saved errors until this operation
+        // explicitly replaces one, so a successful pull publishes its clear.
+        if let Some(saved) = self.states.lock().await.get(&self.root).cloned() {
+            if state.pull_failure_revision == 0 && state.pull_error.is_none() {
+                state.pull_error = saved.pull_error;
+                state.pull_failure_revision = saved.pull_failure_revision;
+            }
+            if state.push_failure_revision == 0 && state.push_error.is_none() {
+                state.push_error = saved.push_error;
+                state.push_failure_revision = saved.push_failure_revision;
+            }
+        }
+        let changed = if operation == "pull" {
+            let changed = state.pull_error != error;
+            if changed || error.is_some() {
+                state.pull_error = error.clone();
+            }
+            if error.is_some() {
+                state.pull_failure_revision = next_failure_revision();
+            }
+            changed
         } else {
-            &mut state.push_error
+            let changed = state.push_error != error;
+            if changed || error.is_some() {
+                state.push_error = error.clone();
+            }
+            if error.is_some() {
+                state.push_failure_revision = next_failure_revision();
+            }
+            changed
         };
-        if *slot != error {
-            *slot = error;
+        if changed || error.is_some() {
             self.states
                 .lock()
                 .await
                 .insert(self.root.clone(), state.clone());
-            self.ctx.emit(EVENT, &*state);
+        }
+        // A second failed command may have the same diagnostic. Its new
+        // revision reaches both a live event and a later reconnect snapshot.
+        if changed || error.is_some() {
+            self.ctx.emit(EVENT, &State {
+                event_operation: Some(operation.into()),
+                ..state.clone()
+            });
         }
     }
 
@@ -635,6 +726,16 @@ mod tests {
         fn push(&self, _: crate::remote::push::Message) {}
     }
 
+    struct Events(std::sync::Mutex<Vec<serde_json::Value>>);
+    impl crate::context::Sink for Events {
+        fn emit(&self, name: &str, payload: serde_json::Value) {
+            if name == EVENT {
+                self.0.lock().unwrap().push(payload);
+            }
+        }
+        fn push(&self, _: crate::remote::push::Message) {}
+    }
+
     fn runtime(fake: Arc<dyn command::Runner>) -> (tempfile::TempDir, Arc<ProjectSync>) {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("project");
@@ -675,6 +776,79 @@ mod tests {
                 true,
             ),
         )
+    }
+
+    #[tokio::test]
+    async fn repeated_failure_revisions_reach_the_saved_snapshot() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), release: None });
+        let (_dir, runtime) = runtime(fake);
+        let error = command::Error {
+            operation: "pull".into(),
+            code: Some(7),
+            timed_out: false,
+            stderr: "offline".into(),
+        };
+        runtime.publish("pull", Some(error.clone())).await;
+        let first = runtime.state.lock().await.clone();
+        runtime.publish("pull", Some(error.clone())).await;
+        let second = runtime.state.lock().await.clone();
+        assert_eq!(second.pull_error, Some(error));
+        assert!(second.pull_failure_revision > first.pull_failure_revision);
+        assert_eq!(second.server_session_id, first.server_session_id);
+        let saved = runtime.states.lock().await.get(&runtime.root).cloned().unwrap();
+        assert_eq!(saved.pull_failure_revision, second.pull_failure_revision);
+        runtime.publish("push", Some(command::Error {
+            operation: "push".into(), code: Some(8), timed_out: false, stderr: "rejected".into(),
+        })).await;
+        let third = runtime.state.lock().await.clone();
+        assert_eq!(third.pull_failure_revision, second.pull_failure_revision);
+        assert!(third.push_failure_revision > second.pull_failure_revision);
+    }
+
+    #[tokio::test]
+    async fn a_read_before_reconcile_broadcasts_an_invalid_config_and_success_clears_it() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), release: None });
+        let (dir, original) = runtime(fake.clone());
+        let root = original.root.to_string_lossy().into_owned();
+        let settings_path = dir.path().join("settings.json");
+        let mut settings = file::load(&settings_path).0;
+        settings.open_projects = vec![root.clone()];
+        settings.projects.get_mut(&root).unwrap().kanban_sync.pull_command.clear();
+        file::save(&settings_path, &settings).unwrap();
+
+        let events = Arc::new(Events(std::sync::Mutex::new(Vec::new())));
+        let ctx = Context::new(
+            Err("x".into()), Ok(dir.path().to_path_buf()), Err("x".into()),
+            None, events.clone(),
+        );
+        let coordinator = Arc::new(Coordinator {
+            ctx, tracker: original.tracker.clone(), runner: fake,
+            projects: Mutex::new(HashMap::new()), clients: Mutex::new(HashMap::new()),
+            reconcile_lock: Mutex::new(()), states: Arc::new(Mutex::new(HashMap::new())),
+        });
+        let handle = Handle(Arc::downgrade(&coordinator));
+
+        let first = handle.state(&root).await;
+        assert!(first.pull_error.is_some());
+        let broadcast: State = serde_json::from_value(events.0.lock().unwrap()[0].clone()).unwrap();
+        assert_eq!(broadcast.pull_failure_revision, first.pull_failure_revision);
+        assert_eq!(broadcast.event_operation.as_deref(), Some("pull"));
+        assert_eq!(events.0.lock().unwrap().len(), 1, "another client heard the first read");
+        handle.state(&root).await;
+        assert_eq!(events.0.lock().unwrap().len(), 1, "another read did not repeat it");
+
+        settings.projects.get_mut(&root).unwrap().kanban_sync.pull_command = "bd dolt pull".into();
+        file::save(&settings_path, &settings).unwrap();
+        handle.pull(&root).await.unwrap();
+        let emitted = events.0.lock().unwrap();
+        assert_eq!(emitted.len(), 2, "success cleared the error before the next tick");
+        let cleared: State = serde_json::from_value(emitted[1].clone()).unwrap();
+        assert!(cleared.pull_error.is_none());
+        assert_eq!(cleared.pull_failure_revision, first.pull_failure_revision);
+        drop(emitted);
+        assert!(handle.state(&root).await.pull_error.is_none());
+        coordinator.reconcile().await;
+        assert_eq!(events.0.lock().unwrap().len(), 2, "the later tick did not repeat it");
     }
 
     #[tokio::test(start_paused = true)]

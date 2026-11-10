@@ -58,7 +58,7 @@ import {
   toggleChanges
 } from '../components/git/changesFold.js'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
-import { initKanbanSync, readKanbanSync, pullKanbanSync, publishOpenProjects, syncProblems, kanbanSyncState } from '../stores/kanbanSync.js'
+import { initKanbanSync, readKanbanSync, pullKanbanSync, publishOpenProjects, syncNotices, dismissSyncNotice, kanbanSyncState } from '../stores/kanbanSync.js'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
@@ -3994,10 +3994,7 @@ const initHere = async () => {
    back and takes the whole notice with it, so without this the one durable
    thing the press left behind — a directory beside `.beads`, holding a copy of
    a database, that nothing in this app will ever remove — would be something a
-   person next met while wondering what it was. The toast is held until it is
-   dismissed rather than timed out like the file tree's: where a copy of one's
-   tracker went is not a fact that has finished being useful after three
-   seconds.
+   person next met while wondering what it was. The toast names the backup for the same ten seconds as the other corner notices.
 
    **The name, not the path.** A `Toast` is 320px with an icon and a dismiss
    button beside its text, and nothing in it or in `tokens/base.css` sets
@@ -5922,30 +5919,15 @@ watch(
    a question about a row, not a visit to it, and the row under the panel says
    so with a highlight of its own. */
 const fileMenuToast = ref(null)
-let fileMenuToastTimer = null
 
-/* Success goes away on its own and a refusal does not, which is the split the
-   rest of the app already keeps: every other toast in this corner is an error
-   held in a store until somebody dismisses it. A copy has nothing on screen to
-   show for itself — an empty clipboard and one holding the path look exactly
-   alike until somebody pastes — so it says so, briefly, and then stops
-   occupying the corner. */
-const SAID_TOAST_MS = 3000
-
+/* A copy leaves nothing on screen behind it. Every result in this corner gets
+   the same ten seconds from the common toast. */
 function sayFileMenu(toast) {
-  clearTimeout(fileMenuToastTimer)
   fileMenuToast.value = toast
-  if (toast?.tone === 'success') {
-    fileMenuToastTimer = setTimeout(() => {
-      fileMenuToast.value = null
-    }, SAID_TOAST_MS)
-  }
 }
 
-onUnmounted(() => clearTimeout(fileMenuToastTimer))
-
 /* What a merge, a rebase, a pull or a push actually moved, in the same corner
-   and for the same three seconds.
+   and for the common ten seconds.
 
    Until this existed a write that git carried through said nothing at all: the
    panel after a merge that brought three commits looks exactly like the panel
@@ -5962,11 +5944,8 @@ onUnmounted(() => clearTimeout(fileMenuToastTimer))
    follows the count. A record cleared to `null` moves the counter too, which is
    what takes the phrase down with the project it was about.
 
-   Success goes away on its own, exactly as the file tree's own toast does: a
-   refusal is held until somebody dismisses it, and this is the other half of
-   that rule rather than a decision of this feature's. */
+   The common toast owns the lifetime, including a repeated summary. */
 const writeNote = ref(null)
-let writeNoteTimer = null
 
 watch(
   () => vcsState.lastWrite?.seq ?? null,
@@ -5975,17 +5954,9 @@ watch(
        commit, a branch made or renamed or deleted, an abort — which is the one
        list, and it lives in `writeSummary.js` rather than in a condition here. */
     const said = writeSummary(vcsState.lastWrite)
-    clearTimeout(writeNoteTimer)
     writeNote.value = said
-    if (said) {
-      writeNoteTimer = setTimeout(() => {
-        writeNote.value = null
-      }, SAID_TOAST_MS)
-    }
   }
 )
-
-onUnmounted(() => clearTimeout(writeNoteTimer))
 
 /* Whether the board on screen came back *after* the project changed, rather
    than being the previous project's still standing there.
@@ -6982,10 +6953,7 @@ watch(activePath, (path) => {
   /* The keys in it are another project's agents, and the project being opened
      brings its own order out of `settings.json`. */
   agentArrangement.value = []
-  /* Held until dismissed is right for a note naming a folder, and it is what
-     makes this line necessary: the folder it names is beside one project's
-     `.beads`, so left standing it would sit over the next project telling
-     somebody about a copy that is not in it. */
+  /* The backup named by this note belongs to the project being left. */
   repairNote.value = null
 })
 
@@ -7007,7 +6975,7 @@ watch(
 const kanbanSyncProblems = computed(() => {
   // The dependency ensures a late event updates the already open board.
   void kanbanSyncState.projects[kanbanSyncState.keys[activePath.value] ?? activePath.value]
-  return syncProblems(activePath.value)
+  return syncNotices(activePath.value)
 })
 
 /* The Sessions tab reads the disk when it is opened, and again whenever the
@@ -8422,15 +8390,18 @@ const toastStackStyle = {
     <div :style="toastStackStyle">
       <Toast
         v-for="problem in kanbanSyncProblems"
-        :key="problem.operation"
+        :key="`${activePath}:${problem.operation}`"
         tone="error"
-        :closable="false"
+        :event="problem.event"
         :title="`Kanban ${problem.operation} failed`"
         :description="problem.stderr || (problem.timedOut ? 'Command timed out.' : `Exit code ${problem.code ?? 'unknown'}`)"
+        @close="dismissSyncNotice(activePath, problem)"
+        @expired="dismissSyncNotice(activePath, problem)"
       />
       <Toast
         v-if="trackerState.lastError"
         tone="error"
+        :event="trackerState.lastErrorSeq"
         :title="trackerState.lastError.title"
         :description="trackerState.lastError.description"
         @close="trackerState.lastError = null"
@@ -8438,6 +8409,7 @@ const toastStackStyle = {
       <Toast
         v-if="filesState.lastError"
         tone="error"
+        :event="filesState.lastErrorSeq"
         title="Could not read the file tree"
         :description="filesState.lastError"
         @close="filesState.lastError = null"
@@ -8445,6 +8417,7 @@ const toastStackStyle = {
       <Toast
         v-if="terminalState.lastError"
         tone="error"
+        :event="terminalState.lastErrorSeq"
         :title="terminalState.lastError.title"
         :description="terminalState.lastError.description"
         @close="terminalState.lastError = null"
@@ -8461,17 +8434,16 @@ const toastStackStyle = {
       <Toast
         v-if="conversationState.lastError && !refusalInPanel"
         tone="error"
+        :event="conversationState.lastError"
         :title="refusalTitle"
         :description="conversationState.lastError.text"
         @close="conversationState.lastError = null"
       />
-      <!-- A repair's success, which the board coming back does not say: the
-           copy it took is the one thing left on disk afterwards, and nothing
-           will ever remove it. Held until dismissed, unlike the timed toast
-           below — this one names a path. -->
+      <!-- A repair's success names the backup left on disk. -->
       <Toast
         v-if="repairNote"
         tone="success"
+        :event="repairNote"
         :title="repairNote.title"
         :description="repairNote.description"
         @close="repairNote = null"
@@ -8481,17 +8453,18 @@ const toastStackStyle = {
       <Toast
         v-if="fileMenuToast"
         :tone="fileMenuToast.tone"
+        :event="fileMenuToast"
         :title="fileMenuToast.title"
         :description="fileMenuToast.description"
         @close="fileMenuToast = null"
       />
       <!-- What a merge, a rebase, a pull or a push moved, which the panel
            behind it cannot say: a merge that brought three commits and one git
-           answered "Already up to date" for leave it looking identical. Timed
-           like the toast above, since this is a success. -->
+           answered "Already up to date" for leave it looking identical. -->
       <Toast
         v-if="writeNote"
         tone="success"
+        :event="vcsState.lastWrite?.seq"
         :title="writeNote.title"
         :description="writeNote.description"
         @close="writeNote = null"
