@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { connection, onReconnect } from './connection.js'
 
-export const kanbanSyncState = reactive({ projects: {}, keys: {}, errorEvents: {}, hiddenEvents: {} })
+export const kanbanSyncState = reactive({ projects: {}, keys: {}, hiddenEvents: {} })
 let initialization = null
 const eventSerial = {}
 let openProjects = []
@@ -26,14 +26,6 @@ export function initKanbanSync() {
   initialization = listen('kanban:sync', ({ payload }) => {
     if (payload?.project) {
       eventSerial[payload.project] = (eventSerial[payload.project] ?? 0) + 1
-      const operation = payload.eventOperation
-      if ((operation === 'pull' || operation === 'push') && payload[`${operation}Error`]) {
-        const events = kanbanSyncState.errorEvents[payload.project] ?? { pull: 0, push: 0 }
-        kanbanSyncState.errorEvents[payload.project] = {
-          ...events,
-          [operation]: events[operation] + 1
-        }
-      }
       kanbanSyncState.projects[payload.project] = payload
     }
   }).then(() => {
@@ -80,13 +72,14 @@ export function syncProblems(project) {
   return [state?.pullError, state?.pushError].filter(Boolean)
 }
 
-// Dismissing a card records only its event. The diagnostic remains in the
-// project snapshot, and a new failed operation has a different event number.
+// The server's revisions survive a missed event and arrive with the next state
+// read. Its session id makes a server restart distinct from the old process.
 export function syncNotices(project) {
   const key = kanbanSyncState.keys[project] ?? project
+  const state = kanbanSyncState.projects[key]
   return syncProblems(project).map((problem) => ({
     ...problem,
-    event: `${key}:${problem.operation}:${kanbanSyncState.errorEvents[key]?.[problem.operation] ?? 0}`
+    event: `${key}:${state?.serverSessionId ?? ''}:${problem.operation}:${state?.[`${problem.operation}FailureRevision`] ?? 0}`
   })).filter((problem) => kanbanSyncState.hiddenEvents[key]?.[problem.operation] !== problem.event)
 }
 
