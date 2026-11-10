@@ -159,6 +159,10 @@ impl Handle {
                         ..State::default()
                     };
                     states.insert(key, state.clone());
+                    coordinator.ctx.emit(EVENT, &State {
+                        event_operation: Some("pull".into()),
+                        ..state.clone()
+                    });
                     return state;
                 }
             }
@@ -502,6 +506,19 @@ impl ProjectSync {
 
     async fn publish(&self, operation: &str, error: Option<command::Error>) {
         let mut state = self.state.lock().await;
+        // A newly constructed runtime can replace an invalid configuration
+        // before reconcile ticks. Keep the saved errors until this operation
+        // explicitly replaces one, so a successful pull publishes its clear.
+        if let Some(saved) = self.states.lock().await.get(&self.root).cloned() {
+            if state.pull_failure_revision == 0 && state.pull_error.is_none() {
+                state.pull_error = saved.pull_error;
+                state.pull_failure_revision = saved.pull_failure_revision;
+            }
+            if state.push_failure_revision == 0 && state.push_error.is_none() {
+                state.push_error = saved.push_error;
+                state.push_failure_revision = saved.push_failure_revision;
+            }
+        }
         let changed = if operation == "pull" {
             let changed = state.pull_error != error;
             if changed || error.is_some() {
@@ -709,6 +726,16 @@ mod tests {
         fn push(&self, _: crate::remote::push::Message) {}
     }
 
+    struct Events(std::sync::Mutex<Vec<serde_json::Value>>);
+    impl crate::context::Sink for Events {
+        fn emit(&self, name: &str, payload: serde_json::Value) {
+            if name == EVENT {
+                self.0.lock().unwrap().push(payload);
+            }
+        }
+        fn push(&self, _: crate::remote::push::Message) {}
+    }
+
     fn runtime(fake: Arc<dyn command::Runner>) -> (tempfile::TempDir, Arc<ProjectSync>) {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("project");
@@ -776,6 +803,52 @@ mod tests {
         let third = runtime.state.lock().await.clone();
         assert_eq!(third.pull_failure_revision, second.pull_failure_revision);
         assert!(third.push_failure_revision > second.pull_failure_revision);
+    }
+
+    #[tokio::test]
+    async fn a_read_before_reconcile_broadcasts_an_invalid_config_and_success_clears_it() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), release: None });
+        let (dir, original) = runtime(fake.clone());
+        let root = original.root.to_string_lossy().into_owned();
+        let settings_path = dir.path().join("settings.json");
+        let mut settings = file::load(&settings_path).0;
+        settings.open_projects = vec![root.clone()];
+        settings.projects.get_mut(&root).unwrap().kanban_sync.pull_command.clear();
+        file::save(&settings_path, &settings).unwrap();
+
+        let events = Arc::new(Events(std::sync::Mutex::new(Vec::new())));
+        let ctx = Context::new(
+            Err("x".into()), Ok(dir.path().to_path_buf()), Err("x".into()),
+            None, events.clone(),
+        );
+        let coordinator = Arc::new(Coordinator {
+            ctx, tracker: original.tracker.clone(), runner: fake,
+            projects: Mutex::new(HashMap::new()), clients: Mutex::new(HashMap::new()),
+            reconcile_lock: Mutex::new(()), states: Arc::new(Mutex::new(HashMap::new())),
+        });
+        let handle = Handle(Arc::downgrade(&coordinator));
+
+        let first = handle.state(&root).await;
+        assert!(first.pull_error.is_some());
+        let broadcast: State = serde_json::from_value(events.0.lock().unwrap()[0].clone()).unwrap();
+        assert_eq!(broadcast.pull_failure_revision, first.pull_failure_revision);
+        assert_eq!(broadcast.event_operation.as_deref(), Some("pull"));
+        assert_eq!(events.0.lock().unwrap().len(), 1, "another client heard the first read");
+        handle.state(&root).await;
+        assert_eq!(events.0.lock().unwrap().len(), 1, "another read did not repeat it");
+
+        settings.projects.get_mut(&root).unwrap().kanban_sync.pull_command = "bd dolt pull".into();
+        file::save(&settings_path, &settings).unwrap();
+        handle.pull(&root).await.unwrap();
+        let emitted = events.0.lock().unwrap();
+        assert_eq!(emitted.len(), 2, "success cleared the error before the next tick");
+        let cleared: State = serde_json::from_value(emitted[1].clone()).unwrap();
+        assert!(cleared.pull_error.is_none());
+        assert_eq!(cleared.pull_failure_revision, first.pull_failure_revision);
+        drop(emitted);
+        assert!(handle.state(&root).await.pull_error.is_none());
+        coordinator.reconcile().await;
+        assert_eq!(events.0.lock().unwrap().len(), 2, "the later tick did not repeat it");
     }
 
     #[tokio::test(start_paused = true)]
