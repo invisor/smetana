@@ -1034,14 +1034,119 @@ mod tests {
         assert!(handle.state(&project).await.pull_error.is_none());
     }
 
-    #[cfg(target_os = "macos")]
+    /// The bundled bd for this machine, if `fetch-bd` has laid it out.
+    fn sidecar_bd() -> Option<PathBuf> {
+        let triple = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "aarch64-apple-darwin"
+        } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+            "x86_64-apple-darwin"
+        } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            "x86_64-unknown-linux-gnu"
+        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+            "aarch64-unknown-linux-gnu"
+        } else {
+            return None;
+        };
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../src-tauri/binaries/bd-{triple}"))
+            .canonicalize()
+            .ok()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "real time: waits for the 60-second push window"]
+    async fn real_bd_end_to_end_local_write_is_pushed_and_pulled_elsewhere() {
+        use std::process::Command;
+        let Some(bd) = sidecar_bd() else {
+            return;
+        };
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        let remote = dir.path().join("remote");
+        for path in [&a, &b, &remote] {
+            std::fs::create_dir(path).unwrap();
+        }
+        let run = |cwd: &Path, args: &[&str]| -> String {
+            let output = Command::new(&bd)
+                .args(args)
+                .current_dir(cwd)
+                .env("BEADS_DIR", cwd.join(".beads"))
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "bd {}: {}", args.join(" "),
+                String::from_utf8_lossy(&output.stderr));
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        };
+        run(&a, &["init", "-p", "kbs", "--non-interactive"]);
+        let url = if std::env::var_os("KBS_GIT_REMOTE").is_some() {
+            let git = |cwd: &Path, args: &[&str]| assert!(Command::new("git").args(args)
+                .current_dir(cwd).status().unwrap().success(), "git {}", args.join(" "));
+            git(&remote, &["init", "--bare", "-q", "-b", "main"]);
+            let seed = dir.path().join("seed");
+            std::fs::create_dir(&seed).unwrap();
+            git(&seed, &["init", "-q", "-b", "main"]);
+            git(&seed, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                "--allow-empty", "-m", "init"]);
+            git(&seed, &["push", "-q", &remote.to_string_lossy(), "main"]);
+            format!("git+file://{}", remote.display())
+        } else {
+            format!("file://{}", remote.display())
+        };
+        run(&a, &["dolt", "remote", "add", "origin", &url]);
+        run(&a, &["create", "First", "--json"]);
+        run(&a, &["dolt", "push"]);
+        run(&b, &["init", "-p", "kbs", "--remote", &url, "--non-interactive"]);
+
+        let root = b.canonicalize().unwrap();
+        let mut settings = crate::settings::model::Settings::default();
+        settings.open_projects = vec![root.to_string_lossy().into_owned()];
+        settings.projects.insert(
+            root.to_string_lossy().into_owned(),
+            crate::settings::model::ProjectState {
+                kanban_sync: KanbanSync { enabled: true, ..KanbanSync::default() },
+                ..Default::default()
+            },
+        );
+        file::save(&dir.path().join("settings.json"), &settings).unwrap();
+        let ctx = Context::new(Err("x".into()), Ok(dir.path().to_path_buf()), Err("x".into()),
+            Some(bd.clone()), Arc::new(Sink));
+        let (sender, _) = tokio::sync::mpsc::channel(1);
+        let coordinator = Arc::new(Coordinator {
+            ctx: ctx.clone(), tracker: TrackerHandle(sender), runner: Arc::new(command::Shell),
+            projects: Mutex::new(HashMap::new()), clients: Mutex::new(HashMap::new()),
+            reconcile_lock: Mutex::new(()), states: Arc::new(Mutex::new(HashMap::new())),
+        });
+        let handle = Handle(Arc::downgrade(&coordinator));
+        handle.legacy_client(1).await;
+        handle.presence(1, 1, vec![root.to_string_lossy().into_owned()]).await;
+        assert!(coordinator.projects.lock().await.contains_key(&root));
+        // Let the observer take its first baseline.
+        tokio::time::sleep(Duration::from_secs(8)).await;
+
+        let created = run(&b, &["create", "Written in b", "--json"]);
+        eprintln!("created in b: {created}");
+        tokio::time::sleep(Duration::from_secs(80)).await;
+        eprintln!("state: {:?}", handle.state(&root.to_string_lossy()).await);
+        run(&a, &["dolt", "pull"]);
+        let listed = run(&a, &["list", "--all", "--json"]);
+        assert!(listed.contains("Written in b"), "b's write never reached the remote: {listed}");
+
+        run(&a, &["create", "Written in a", "--json"]);
+        run(&a, &["dolt", "push"]);
+        handle.pull(&root.to_string_lossy()).await.unwrap();
+        let listed = run(&b, &["list", "--all", "--json"]);
+        assert!(listed.contains("Written in a"), "a's write never reached b: {listed}");
+        assert!(listed.contains("Written in b"), "b lost its own write: {listed}");
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn real_bd_remote_import_and_concurrent_local_write_keep_the_right_origin() {
         use std::process::Command;
-        let bd = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src-tauri/binaries/bd-aarch64-apple-darwin")
-            .canonicalize();
-        let Ok(bd) = bd else {
+        let Some(bd) = sidecar_bd() else {
             return;
         };
         let dir = tempfile::tempdir_in("/tmp").unwrap();
