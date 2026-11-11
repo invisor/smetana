@@ -78,4 +78,38 @@ describe('project-addressed Kanban sync state', () => {
     expect(sync.syncProblems('/a')).toEqual([])
     expect(sync.syncProblems('/canonical/b')).toEqual([error])
   })
+
+  it('shows the same failure after a missed event and after a server restart', async () => {
+    const { ipc, emit } = await loadStores()
+    const sync = await import('../../src/stores/kanbanSync.js')
+    await sync.initKanbanSync()
+    const error = { operation: 'pull', code: 7, timedOut: false, stderr: 'offline' }
+    const failed = {
+      project: '/canonical/a', pullError: error, pushError: null,
+      serverSessionId: 'server-a', pullFailureRevision: 1, pushFailureRevision: 0,
+      eventOperation: 'pull'
+    }
+    await emit('kanban:sync', failed)
+    expect(sync.syncNotices('/canonical/a')[0].event).toBe('/canonical/a:server-a:pull:1')
+    sync.dismissSyncNotice('/canonical/a', sync.syncNotices('/canonical/a')[0])
+    expect(sync.syncNotices('/canonical/a')).toEqual([])
+    ipc.on('kanban_sync_state', { ...failed, eventOperation: undefined })
+    await sync.readKanbanSync('/canonical/a')
+    expect(sync.syncNotices('/canonical/a')).toEqual([])
+
+    // The second failure's event was lost while disconnected. The snapshot is
+    // enough to identify it without changing the diagnostic text.
+    ipc.on('kanban_sync_state', { ...failed, pullFailureRevision: 2, eventOperation: undefined })
+    await sync.readKanbanSync('/canonical/a')
+    expect(sync.syncNotices('/canonical/a')[0].event).toBe('/canonical/a:server-a:pull:2')
+    sync.dismissSyncNotice('/canonical/a', sync.syncNotices('/canonical/a')[0])
+    await sync.readKanbanSync('/canonical/a')
+    expect(sync.syncNotices('/canonical/a')).toEqual([])
+
+    // A new server starts its counter at one, but has a different session id.
+    ipc.on('kanban_sync_state', { ...failed, serverSessionId: 'server-b', eventOperation: undefined })
+    await sync.readKanbanSync('/canonical/a')
+    expect(sync.syncNotices('/canonical/a')[0].event).toBe('/canonical/a:server-b:pull:1')
+    expect(sync.syncProblems('/canonical/a')).toEqual([error])
+  })
 })
